@@ -216,7 +216,7 @@ class GQE(nn.Module):
             for (negatives, flattened_queries, queries, query_structure) in tqdm(dataloader):
                 batch_queries_dict, batch_idx_dict = defaultdict(list), defaultdict(list)
 
-                for i, query in enumerate(queries):
+                for i, query in enumerate(flattened_queries):
                     batch_queries_dict[query_structure[i]].append(query)
                     batch_idx_dict[query_structure[i]].append(i)
 
