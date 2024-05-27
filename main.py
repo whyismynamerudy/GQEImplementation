@@ -125,6 +125,15 @@ def save_model(model, save_dir, results, hyperparameters, model_name: str):
         f.write("\n *** \n")
 
 
+def average_logs(logs):
+    avg_log = {
+        'positive_sample_loss': sum(log['positive_sample_loss'] for log in logs) / len(logs),
+        'negative_sample_loss': sum(log['negative_sample_loss'] for log in logs) / len(logs),
+        'loss': sum(log['loss'] for log in logs) / len(logs),
+    }
+    return avg_log
+
+
 def train(model, optimizer, train_path_dataloader, train_other_dataloader, valid_dataloader, val_answers, args):
     model.train().to(DEVICE)
 
@@ -140,20 +149,32 @@ def train(model, optimizer, train_path_dataloader, train_other_dataloader, valid
     for i in range(args.num_epochs):
         model.train().to(DEVICE)
 
+        epoch_path, epoch_other = [], []
+
         print('Epoch {}/{}'.format(i + 1, args.num_epochs))
         print("path_dataloader:")
         for (positives, negatives, flattened_queries, query_structures) in tqdm(train_path_dataloader):
             log = GQE.train_step(model, optimizer, positives, negatives, flattened_queries, query_structures, DEVICE)
-            train_path_metrics.append(log)
-            print(log)
+            epoch_path.append(log)
+            # print(log)
 
         if train_other_dataloader is not None:
             print("other_dataloader:")
             for (positives, negatives, flattened_queries, query_structures) in tqdm(train_other_dataloader):
                 log = GQE.train_step(model, optimizer, positives, negatives, flattened_queries, query_structures,
                                      DEVICE)
-                train_other_metrics.append(log)
-                print(log)
+                epoch_other.append(log)
+                # print(log)
+
+        if epoch_path:
+            avg_path_log = average_logs(epoch_path)
+            train_path_metrics.append(avg_path_log)
+            print(avg_path_log)
+
+        if epoch_other:
+            avg_other_log = average_logs(epoch_other)
+            train_other_metrics.append(avg_other_log)
+            print(avg_other_log)
 
         if args.do_valid:
             if i % args.val_every_n_epochs == 0:
