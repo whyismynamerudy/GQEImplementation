@@ -56,6 +56,8 @@ def parse_args(args=None):
     parser.add_argument('-b', '--batch_size', default=32, type=int, help="batch size of queries")
     parser.add_argument('--test_batch_size', default=1, type=int, help='valid/test batch size')
     parser.add_argument('-lr', '--learning_rate', default=0.0001, type=float)
+    parser.add_argument('--val_every_n_epochs', default=2, type=int, help="number of epochs after which to run "
+                                                                          "validation on")
 
     parser.add_argument('--tasks', default='1p.2p.3p.2i.3i', type=str,
                         help="tasks connected by dot, only supports 1p, 2p, 3p, 2i, and 3i")
@@ -102,12 +104,63 @@ def load_data(path, tasks, args):
             test_hard_answers, test_easy_answers, num_entities, num_relations)
 
 
-def train(model, optimizer, train_path_dataloader, train_other_dataloader, valid_dataloader, args):
+def save_model(model, save_dir, results, hyperparameters, model_name: str):
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    model_path = os.path.join(save_dir, f"{CURR_TIME}_{model_name}")
+
+    torch.save(model.state_dict(), model_path)
+
+    results_path = os.path.join(save_dir, f"{CURR_TIME}_results.txt")
+    with open(results_path, 'w') as f:
+        f.write(f"MRR: {results[0]}\n")
+        f.write(f"HIT@10: {results[1]}\n")
+        f.write(f"Details:\n")
+        for key, value in hyperparameters.items():
+            f.write(f"{key}: {value}\n")
+        f.write("\n *** \n")
+
+
+def train(model, optimizer, train_path_dataloader, train_other_dataloader, valid_dataloader, val_answers, args):
     model.train().to(DEVICE)
 
-    for i in range(args.num_epochs):
-        print('Epoch {}/{}'.format(i + 1, args.num_epochs))
+    train_path_metrics, train_other_metrics = [], []
+    val_metrics = []
 
+    if args.do_valid:
+        print("Val after {} epochs...".format(args.val_every_n_epochs))
+
+    if train_other_dataloader is not None:
+        print("Doing training on both path and other queries per epoch.")
+
+    for i in range(args.num_epochs):
+        model.train().to(DEVICE)
+
+        print('Epoch {}/{}'.format(i + 1, args.num_epochs))
+        print("path_dataloader:")
+        for (positives, negatives, flattened_queries, query_structures) in tqdm(train_path_dataloader):
+            log = GQE.train_step(model, optimizer, positives, negatives, flattened_queries, query_structures, DEVICE)
+            train_path_metrics.append(log)
+
+        if train_other_dataloader is not None:
+            print("other_dataloader:")
+            for (positives, negatives, flattened_queries, query_structures) in tqdm(train_other_dataloader):
+                log = GQE.train_step(model, optimizer, positives, negatives, flattened_queries, query_structures,
+                                     DEVICE)
+                train_other_metrics.append(log)
+
+        if args.do_valid:
+            if i % args.val_every_n_epochs == 0:
+                # do validation
+                print("val_dataloader:")
+                model.eval()
+                for (negatives, flattened_queries, queries, query_structure) in tqdm(valid_dataloader):
+                    logs = GQE.test_step(model, (negatives, flattened_queries, queries, query_structure),
+                                         val_answers, DEVICE)
+                    val_metrics.append(logs)
+
+    return train_path_metrics, train_other_metrics, val_metrics
 
 def main(args):
     tasks = args.tasks.split('.')
@@ -188,13 +241,18 @@ def main(args):
 
     if args.do_train:
         optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-        print(GQE.train_step(model, optimizer, train_path_dataloader, DEVICE))
-        # train(model, optimizer, train_path_dataloader, train_other_dataloader, valid_dataloader, args)
-        # positives, negatives, flattened_queries, query_structures = next(iter(train_path_dataloader))
-        # print(positives.shape)
-        # print(negatives.shape)
-        # print(flattened_queries.shape)
-        # print(query_structures.shape)
+        # print(GQE.train_step(model, optimizer, train_path_dataloader, DEVICE))
+        train_path_metrics, train_other_metrics, val_metrics = train(model, optimizer, train_path_dataloader, train_other_dataloader, valid_dataloader,
+              (valid_easy_answers, valid_hard_answers), args)
+
+        if args.do_valid:
+            final_val_logs = []
+            print("val_dataloader:")
+            model.eval()
+            for (negatives, flattened_queries, queries, query_structure) in tqdm(valid_dataloader):
+                logs = GQE.test_step(model, (negatives, flattened_queries, queries, query_structure),
+                                     (valid_easy_answers, valid_hard_answers), DEVICE)
+                final_val_logs.append(logs)
 
 
 if __name__ == '__main__':

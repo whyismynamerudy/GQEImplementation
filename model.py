@@ -62,25 +62,26 @@ class GQE(nn.Module):
                 all_union_idx.extend(batch_idx_dict[qs])
             else:
                 q_intersect, _ = self.embed_query_vec(batch_queries_dict[qs], qs, 0)
-                all_union_intersection_embeddings.append(q_intersect)
+                all_intersection_embeddings.append(q_intersect)
                 all_idx.extend(batch_idx_dict[qs])
 
-        if all_intersection_embeddings:
+        if len(all_intersection_embeddings) > 0:
             all_intersection_embeddings = torch.cat(all_intersection_embeddings, dim=0).unsqueeze(1)
-        if all_union_intersection_embeddings:
+        if len(all_union_intersection_embeddings) > 0:
             all_union_intersection_embeddings = torch.cat(all_union_intersection_embeddings, dim=0).unsqueeze(1)
             all_union_intersection_embeddings = all_union_intersection_embeddings.view(
                 all_union_intersection_embeddings.size(0) // 2, 2, 1, -1)
 
         if positive_sample is not None:
-            if all_intersection_embeddings is not None:
+            if len(all_intersection_embeddings) > 0:
                 positive_embeddings = torch.index_select(self.entity_embedding.weight, dim=0,
                                                          index=positive_sample[all_idx]).unsqueeze(1)
-                positive_logit = self.logit(positive_embeddings, all_union_intersection_embeddings)
+                # print(positive_embeddings.shape, all_intersection_embeddings.shape)
+                positive_logit = self.logit(positive_embeddings, all_intersection_embeddings)
             else:
                 positive_logit = torch.Tensor([]).to(device)
 
-            if all_union_intersection_embeddings is not None:
+            if len(all_union_intersection_embeddings) > 0:
                 positive_embeddings = torch.index_select(self.entity_embedding.weight, dim=0,
                                                          index=positive_sample[all_union_idx]).unsqueeze(1).unsqueeze(1)
                 positive_union_logit = \
@@ -93,7 +94,7 @@ class GQE(nn.Module):
             positive_logit = None
 
         if negative_sample is not None:
-            if all_intersection_embeddings is not None:
+            if len(all_intersection_embeddings) > 0:
                 reg = negative_sample[all_idx]
                 negative_embeddings = torch.index_select(self.entity_embedding.weight, dim=0, index=reg.view(-1)).view(
                     reg.size(0), reg.size(1), -1)
@@ -101,7 +102,7 @@ class GQE(nn.Module):
             else:
                 negative_logit = torch.Tensor([]).to(device)
 
-            if all_union_intersection_embeddings is not None:
+            if len(all_union_intersection_embeddings) > 0:
                 reg = negative_sample[all_union_idx]
                 negative_embeddings = torch.index_select(self.entity_embedding.weight, dim=0, index=reg.view(-1)).view(
                     reg.size(0), 1, reg.size(1), -1)
@@ -169,16 +170,8 @@ class GQE(nn.Module):
         return self.gamma - torch.norm(entity_emb - query_emb, p=1, dim=-1)
 
     @staticmethod
-    def train_step(model, optimizer, dataloader, device):
-        model.train()
+    def train_step(model, optimizer, positives, negatives, flattened_queries, query_structures, device):
         optimizer.zero_grad()
-
-        try:
-            positives, negatives, flattened_queries, query_structures = next(iter(dataloader))
-        except StopIteration:
-            # If the dataloader is exhausted, reinitialize it
-            dataloader = iter(dataloader)
-            positives, negatives, flattened_queries, query_structures = next(dataloader)
 
         positives.to(device)
         negatives.to(device)
@@ -210,3 +203,68 @@ class GQE(nn.Module):
             'loss': loss.item(),
         }
         return log
+
+    @staticmethod
+    def test_step(model, data, answers, device):
+        (easy_answers, hard_answers) = answers
+        (negatives, flattened_queries, queries, query_structure) = data
+        logs = defaultdict(list)
+
+        with torch.no_grad():
+            batch_queries_dict, batch_idx_dict = defaultdict(list), defaultdict(list)
+
+            for i, query in enumerate(queries):
+                batch_queries_dict[query_structure[i]].append(query)
+                batch_idx_dict[query_structure[i]].append(i)
+
+            for qs in batch_queries_dict:
+                batch_queries_dict[qs] = torch.LongTensor(batch_queries_dict[qs]).to(device)
+
+            negatives.to(device)
+
+            _, negative_logit, idx = model(None, negatives, batch_queries_dict, batch_idx_dict, device)
+
+            queries = [queries[i] for i in idx]
+            query_structures = [query_structure[i] for i in idx]
+
+            sorted_logits = torch.argsort(negative_logit, dim=1, descending=True)
+            ranked_logits = sorted_logits.clone().to(torch.float)
+
+            ranked_logits = ranked_logits.scatter_(1,
+                                                   sorted_logits,
+                                                   torch.arange(model.num_entities).to(torch.float).repeat(sorted_logits.size(0), 1)).to(device)
+
+            for idx, (i, query, query_structure) in enumerate(zip(sorted_logits[:, 0], queries, query_structures)):
+                hard_answer, easy_answer = hard_answers[query], easy_answers[query]
+                num_hard, num_easy = len(hard_answer), len(easy_answer)
+
+                curr_ranking = ranked_logits[idx, list(easy_answer) + list(hard_answer)]
+                curr_ranking, indices = torch.sort(curr_ranking)
+
+                masks = indices >= num_easy
+                answer_list = torch.arange(num_hard + num_easy).to(torch.float).to(device)
+
+                curr_ranking = curr_ranking - answer_list + 1
+                curr_ranking = curr_ranking[masks]
+
+                mrr = torch.mean(1.0/curr_ranking).item()
+                hit_at_10 = torch.mean((curr_ranking <= 10).to(torch.float)).item()
+
+                logs[query_structure].append({
+                    "MRR": mrr,
+                    "HIT@10": hit_at_10,
+                    "num_hard": num_hard,
+                })
+
+        return logs
+
+
+
+        # try:
+        #     positives, negatives, flattened_queries, query_structures = next(iter(dataloader))
+        # except StopIteration:
+        #     # If the dataloader is exhausted, reinitialize it
+        #     dataloader = iter(dataloader)
+        #     positives, negatives, flattened_queries, query_structures = next(dataloader)
+
+
