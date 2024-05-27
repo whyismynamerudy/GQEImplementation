@@ -5,6 +5,7 @@ from collections import defaultdict
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 
 
 class CenterIntersection(nn.Module):
@@ -205,60 +206,70 @@ class GQE(nn.Module):
         return log
 
     @staticmethod
-    def test_step(model, data, answers, device):
+    def evaluate(model, answers, dataloader, device):
+        model.eval()
+
         (easy_answers, hard_answers) = answers
-        (negatives, flattened_queries, queries, query_structure) = data
         logs = defaultdict(list)
 
         with torch.no_grad():
-            batch_queries_dict, batch_idx_dict = defaultdict(list), defaultdict(list)
+            for (negatives, flattened_queries, queries, query_structure) in tqdm(dataloader):
+                batch_queries_dict, batch_idx_dict = defaultdict(list), defaultdict(list)
 
-            for i, query in enumerate(queries):
-                batch_queries_dict[query_structure[i]].append(query)
-                batch_idx_dict[query_structure[i]].append(i)
+                for i, query in enumerate(queries):
+                    batch_queries_dict[query_structure[i]].append(query)
+                    batch_idx_dict[query_structure[i]].append(i)
 
-            for qs in batch_queries_dict:
-                batch_queries_dict[qs] = torch.LongTensor(batch_queries_dict[qs]).to(device)
+                for qs in batch_queries_dict:
+                    batch_queries_dict[qs] = torch.LongTensor(batch_queries_dict[qs]).to(device)
 
-            negatives.to(device)
+                negatives.to(device)
 
-            _, negative_logit, idx = model(None, negatives, batch_queries_dict, batch_idx_dict, device)
+                _, negative_logit, idx = model(None, negatives, batch_queries_dict, batch_idx_dict, device)
 
-            queries = [queries[i] for i in idx]
-            query_structures = [query_structure[i] for i in idx]
+                queries = [queries[i] for i in idx]
+                query_structures = [query_structure[i] for i in idx]
 
-            sorted_logits = torch.argsort(negative_logit, dim=1, descending=True)
-            ranked_logits = sorted_logits.clone().to(torch.float)
+                sorted_logits = torch.argsort(negative_logit, dim=1, descending=True)
+                ranked_logits = sorted_logits.clone().to(torch.float)
 
-            ranked_logits = ranked_logits.scatter_(1,
-                                                   sorted_logits,
-                                                   torch.arange(model.num_entities).to(torch.float).repeat(sorted_logits.size(0), 1)).to(device)
+                ranked_logits = ranked_logits.scatter_(1,
+                                                       sorted_logits,
+                                                       torch.arange(model.num_entities).to(torch.float).repeat(
+                                                           sorted_logits.size(0), 1)).to(device)
 
-            for idx, (i, query, query_structure) in enumerate(zip(sorted_logits[:, 0], queries, query_structures)):
-                hard_answer, easy_answer = hard_answers[query], easy_answers[query]
-                num_hard, num_easy = len(hard_answer), len(easy_answer)
+                for idx, (i, query, query_structure) in enumerate(zip(sorted_logits[:, 0], queries, query_structures)):
+                    hard_answer, easy_answer = hard_answers[query], easy_answers[query]
+                    num_hard, num_easy = len(hard_answer), len(easy_answer)
 
-                curr_ranking = ranked_logits[idx, list(easy_answer) + list(hard_answer)]
-                curr_ranking, indices = torch.sort(curr_ranking)
+                    curr_ranking = ranked_logits[idx, list(easy_answer) + list(hard_answer)]
+                    curr_ranking, indices = torch.sort(curr_ranking)
 
-                masks = indices >= num_easy
-                answer_list = torch.arange(num_hard + num_easy).to(torch.float).to(device)
+                    masks = indices >= num_easy
+                    answer_list = torch.arange(num_hard + num_easy).to(torch.float).to(device)
 
-                curr_ranking = curr_ranking - answer_list + 1
-                curr_ranking = curr_ranking[masks]
+                    curr_ranking = curr_ranking - answer_list + 1
+                    curr_ranking = curr_ranking[masks]
 
-                mrr = torch.mean(1.0/curr_ranking).item()
-                hit_at_10 = torch.mean((curr_ranking <= 10).to(torch.float)).item()
+                    mrr = torch.mean(1.0 / curr_ranking).item()
+                    hit_at_10 = torch.mean((curr_ranking <= 10).to(torch.float)).item()
 
-                logs[query_structure].append({
-                    "MRR": mrr,
-                    "HIT@10": hit_at_10,
-                    "num_hard": num_hard,
-                })
+                    logs[query_structure].append({
+                        'MRR': mrr,
+                        'HITS10': hit_at_10,
+                        'num_hard_answer': num_hard,
+                    })
 
-        return logs
+        metrics = defaultdict(lambda: defaultdict(int))
+        for query_structure in logs:
+            for metric in logs[query_structure][0].keys():
+                if metric in ['num_hard_answer']:
+                    continue
+                metrics[query_structure][metric] = sum([log[metric] for log in logs[query_structure]]) / len(
+                    logs[query_structure])
+            metrics[query_structure]['num_queries'] = len(logs[query_structure])
 
-
+        return metrics
 
         # try:
         #     positives, negatives, flattened_queries, query_structures = next(iter(dataloader))
@@ -266,5 +277,3 @@ class GQE(nn.Module):
         #     # If the dataloader is exhausted, reinitialize it
         #     dataloader = iter(dataloader)
         #     positives, negatives, flattened_queries, query_structures = next(dataloader)
-
-

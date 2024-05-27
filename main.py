@@ -104,6 +104,7 @@ def load_data(path, tasks, args):
             test_hard_answers, test_easy_answers, num_entities, num_relations)
 
 
+# needs to be updated
 def save_model(model, save_dir, results, hyperparameters, model_name: str):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -126,7 +127,7 @@ def train(model, optimizer, train_path_dataloader, train_other_dataloader, valid
     model.train().to(DEVICE)
 
     train_path_metrics, train_other_metrics = [], []
-    val_metrics = []
+    val_metrics = None
 
     if args.do_valid:
         print("Val after {} epochs...".format(args.val_every_n_epochs))
@@ -142,6 +143,7 @@ def train(model, optimizer, train_path_dataloader, train_other_dataloader, valid
         for (positives, negatives, flattened_queries, query_structures) in tqdm(train_path_dataloader):
             log = GQE.train_step(model, optimizer, positives, negatives, flattened_queries, query_structures, DEVICE)
             train_path_metrics.append(log)
+            print(log)
 
         if train_other_dataloader is not None:
             print("other_dataloader:")
@@ -149,18 +151,17 @@ def train(model, optimizer, train_path_dataloader, train_other_dataloader, valid
                 log = GQE.train_step(model, optimizer, positives, negatives, flattened_queries, query_structures,
                                      DEVICE)
                 train_other_metrics.append(log)
+                print(log)
 
         if args.do_valid:
             if i % args.val_every_n_epochs == 0:
                 # do validation
                 print("val_dataloader:")
-                model.eval()
-                for (negatives, flattened_queries, queries, query_structure) in tqdm(valid_dataloader):
-                    logs = GQE.test_step(model, (negatives, flattened_queries, queries, query_structure),
-                                         val_answers, DEVICE)
-                    val_metrics.append(logs)
+                val_metrics = GQE.evaluate(model, val_answers, valid_dataloader, DEVICE)
+                print(val_metrics)
 
     return train_path_metrics, train_other_metrics, val_metrics
+
 
 def main(args):
     tasks = args.tasks.split('.')
@@ -242,17 +243,35 @@ def main(args):
     if args.do_train:
         optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
         # print(GQE.train_step(model, optimizer, train_path_dataloader, DEVICE))
-        train_path_metrics, train_other_metrics, val_metrics = train(model, optimizer, train_path_dataloader, train_other_dataloader, valid_dataloader,
-              (valid_easy_answers, valid_hard_answers), args)
+        train_path_metrics, train_other_metrics, val_metrics = train(model, optimizer, train_path_dataloader,
+                                                                     train_other_dataloader, valid_dataloader,
+                                                                     (valid_easy_answers, valid_hard_answers),
+                                                                     args)
 
+        final_val_metrics = None
         if args.do_valid:
-            final_val_logs = []
-            print("val_dataloader:")
             model.eval()
-            for (negatives, flattened_queries, queries, query_structure) in tqdm(valid_dataloader):
-                logs = GQE.test_step(model, (negatives, flattened_queries, queries, query_structure),
-                                     (valid_easy_answers, valid_hard_answers), DEVICE)
-                final_val_logs.append(logs)
+            print("val_dataloader:")
+            final_val_metrics = GQE.evaluate(model, (valid_easy_answers, valid_hard_answers), valid_dataloader, DEVICE)
+            print(final_val_metrics)
+
+        save_model(model, args.save_path, (train_path_metrics, train_other_metrics, val_metrics, final_val_metrics),
+                   hyperparameters={
+                       "gamma": args.gamma,
+                       "negative_sample_size": args.negative_sample_size,
+                       "hidden_dim": args.hidden_dim,
+                       "num_epochs": args.num_epochs,
+                       "batch_size": args.batch_size,
+                       "test_batch_size": args.test_batch_size,
+                       "lr": args.learning_rate,
+                   },
+                   model_name='model.pth')
+
+        if args.do_test:
+            print("Testing on model just trained...")
+            model.eval()
+            test_metrics = GQE.evaluate(model, (test_easy_answers, test_hard_answers), test_dataloader, DEVICE)
+            print("Test Metrics: ", test_metrics)
 
 
 if __name__ == '__main__':
