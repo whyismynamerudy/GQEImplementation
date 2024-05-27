@@ -150,7 +150,7 @@ class GQE(nn.Module):
             for i in range(len(query_structure)):
                 embedding, idx = self.embed_query_vec(queries, query_structure[i], idx)
                 embedding_list.append(embedding)
-            embedding = self.center_net(torch.stack(embedding_list))
+            embedding = self.intersection(torch.stack(embedding_list))
 
         return embedding, idx
 
