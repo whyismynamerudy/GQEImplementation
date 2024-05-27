@@ -275,4 +275,5 @@ def main(args):
 
 
 if __name__ == '__main__':
+    print("Running at {} on {}".format(CURR_TIME, "CUDA" if torch.cuda.is_available() else "CPU"))
     main(parse_args())
