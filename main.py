@@ -115,8 +115,10 @@ def save_model(model, save_dir, results, hyperparameters, model_name: str):
 
     results_path = os.path.join(save_dir, f"{CURR_TIME}_results.txt")
     with open(results_path, 'w') as f:
-        f.write(f"MRR: {results[0]}\n")
-        f.write(f"HIT@10: {results[1]}\n")
+        f.write(f"train_path_metrics: {results[0]}\n")
+        f.write(f"train_other_metrics: {results[1]}\n")
+        f.write(f"val_metrics: {results[2]}\n")
+        f.write(f"val_final_metrics: {results[3]}\n")
         f.write(f"Details:\n")
         for key, value in hyperparameters.items():
             f.write(f"{key}: {value}\n")
