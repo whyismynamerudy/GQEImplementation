@@ -36,6 +36,8 @@ class TrainDataset(Dataset):
 
         batched_positives = torch.cat(positives)
         batched_negatives = torch.stack(negatives)
+        # flattened_queries = torch.cat(flattened_queries)
+        # query_structures = torch.cat(query_structures)
 
         return batched_positives, batched_negatives, flattened_queries, query_structures
 

@@ -4,6 +4,14 @@ Primary file for running GQE.
 import argparse
 import os
 import pickle
+import datetime
+from collections import defaultdict
+import torch
+from torch.utils.data import DataLoader
+from dataloader import TrainDataset, TestDataset
+from util import *
+from model import GQE
+from tqdm import tqdm
 
 query_name_dict = {('e', ('r',)): '1p',
                    ('e', ('r', 'r')): '2p',
@@ -24,26 +32,28 @@ query_name_dict = {('e', ('r',)): '1p',
                    }
 name_query_dict = {value: key for key, value in query_name_dict.items()}
 all_tasks = list(name_query_dict.keys())  # ['1p', '2p', '3p', '2i', '3i', 'ip', 'pi', '2in', '3in', 'inp', 'pin',
-
-
 # 'pni', '2u-DNF', '2u-DM', 'up-DNF', 'up-DM']
+
+CURR_TIME = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--cuda', action='store_true', help='use GPU')
+    # parser.add_argument('--cuda', action='store_true', help='use GPU')
 
     parser.add_argument('--do_train', action='store_true', help="do train")
     parser.add_argument('--do_valid', action='store_true', help="do valid")
     parser.add_argument('--do_test', action='store_true', help="do test")
 
-    parser.add_argument('--data_path', type=str, default=None, help="KG data path")
+    parser.add_argument('-g', '--gamma', default=12.0, type=float, help="margin in the loss")
+    parser.add_argument('--data_path', type=str, default=None, help="KG data path", required=True)
     parser.add_argument('-n', '--negative_sample_size', default=128, type=int,
                         help="negative entities sampled per query")
     parser.add_argument('-d', '--hidden_dim', default=500, type=int, help="embedding dimension")
-
-    parser.add_argument('-b', '--batch_size', default=1024, type=int, help="batch size of queries")
+    parser.add_argument('--num_epochs', default=5, type=int, help="number of epochs")
+    parser.add_argument('-b', '--batch_size', default=32, type=int, help="batch size of queries")
     parser.add_argument('--test_batch_size', default=1, type=int, help='valid/test batch size')
     parser.add_argument('-lr', '--learning_rate', default=0.0001, type=float)
 
@@ -92,8 +102,99 @@ def load_data(path, tasks, args):
             test_hard_answers, test_easy_answers, num_entities, num_relations)
 
 
+def train(model, optimizer, train_path_dataloader, train_other_dataloader, valid_dataloader, args):
+    model.train().to(DEVICE)
+
+    for i in range(args.num_epochs):
+        print('Epoch {}/{}'.format(i + 1, args.num_epochs))
+
+
 def main(args):
-    pass
+    tasks = args.tasks.split('.')
+    for task in tasks:
+        if 'n' in task:
+            assert False, "GQE doesn't work with negation."
+
+    args.save_path = os.path.join('logs', args.data_path.split('/')[-1], args.tasks, 'vec', "g-{}".format(args.gamma),
+                                  CURR_TIME)
+    if not os.path.exists(args.save_path):
+        os.makedirs(args.save_path)
+
+    (train_queries, train_answers, valid_queries, valid_hard_answers, valid_easy_answers, test_queries,
+     test_hard_answers, test_easy_answers, num_entities, num_relations) = load_data(args.data_path, tasks, args)
+
+    train_path_dataloader, train_other_dataloader, valid_dataloader, test_dataloader = None, None, None, None
+
+    if args.do_train:
+        print("Configuring training data...")
+        # print("train_queries.length: {}".format(len(train_queries)))
+        train_path_queries, train_other_queries = defaultdict(set), defaultdict(set)
+
+        path_list = ['1p', '2p', '3p']
+        for qs in train_queries:
+            if query_name_dict[qs] in path_list:
+                train_path_queries[qs] = train_queries[qs]
+            else:
+                train_other_queries[qs] = train_queries[qs]
+
+        # print("train_path_queries.length: {}".format(len(train_path_queries)))
+        # print("train_other_queries.length: {}".format(len(train_other_queries)))
+
+        train_path_queries = flatten_query(train_path_queries)
+
+        # print("train_path_queries_flattened.length: {}".format(len(train_path_queries)))
+
+        train_path_dataset = TrainDataset(train_path_queries, num_entities, num_relations, args.negative_sample_size,
+                                          train_answers)
+        train_path_dataloader = DataLoader(train_path_dataset,
+                                           collate_fn=TrainDataset.collate_fn,
+                                           batch_size=args.batch_size,
+                                           shuffle=True)
+
+        if train_other_queries:
+            train_other_queries = flatten_query(train_other_queries)
+            train_other_datasets = TrainDataset(train_other_queries, num_entities, num_relations,
+                                                args.negative_sample_size, train_answers)
+            train_other_dataloader = DataLoader(train_other_datasets,
+                                                collate_fn=TrainDataset.collate_fn,
+                                                batch_size=args.batch_size,
+                                                shuffle=True)
+        else:
+            train_other_dataloader = None
+
+    if args.do_valid:
+        valid_queries = flatten_query(valid_queries)
+        valid_dataset = TestDataset(valid_queries, num_entities, num_relations)
+        valid_dataloader = DataLoader(valid_dataset,
+                                      collate_fn=TestDataset.collate_fn,
+                                      batch_size=args.test_batch_size)
+
+    if args.do_test:
+        test_queries = flatten_query(test_queries)
+        test_dataset = TestDataset(test_queries, num_entities, num_relations)
+        test_dataloader = DataLoader(test_dataset,
+                                     collate_fn=TestDataset.collate_fn,
+                                     batch_size=args.test_batch_size)
+
+    model = GQE(
+        num_entities=num_entities,
+        num_relations=num_relations,
+        embed_dim=args.hidden_dim,
+        gamma=args.gamma,
+        query_name_dict=query_name_dict
+    )
+    model.to(DEVICE)
+    print("Tasks: ", tasks)
+
+    if args.do_train:
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+        print(GQE.train_step(model, optimizer, train_path_dataloader, DEVICE))
+        # train(model, optimizer, train_path_dataloader, train_other_dataloader, valid_dataloader, args)
+        # positives, negatives, flattened_queries, query_structures = next(iter(train_path_dataloader))
+        # print(positives.shape)
+        # print(negatives.shape)
+        # print(flattened_queries.shape)
+        # print(query_structures.shape)
 
 
 if __name__ == '__main__':
