@@ -53,7 +53,7 @@ class TrainDataset(Dataset):
             mask = ~torch.isin(negative_sample, torch.tensor(list(self.answer[query]), dtype=torch.long))
             negative_sample = negative_sample[mask]
             samples.append(negative_sample)
-            size += negative_sample.size
+            size += negative_sample.size(0)
 
         # negative_sample = torch.from_numpy(np.concatenate(samples)[:self.negative_sample_size])
         negative_sample = torch.cat(samples)[:self.negative_sample_size]
