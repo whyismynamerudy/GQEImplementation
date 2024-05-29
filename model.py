@@ -230,26 +230,26 @@ class GQE(nn.Module):
                 queries = [queries[i] for i in idx]
                 query_structures = [query_structure[i] for i in idx]
 
-                sorted_logits = torch.argsort(negative_logit, dim=1, descending=True)
-                ranked_logits = sorted_logits.clone().to(torch.float)
+                sorted_logits = torch.argsort(negative_logit, dim=1, descending=True).to(device)
+                ranked_logits = sorted_logits.clone().to(torch.float).to(device)
 
                 ranked_logits = ranked_logits.scatter_(1,
                                                        sorted_logits,
                                                        torch.arange(model.num_entities).to(torch.float).repeat(
-                                                           sorted_logits.size(0), 1)).to(device)
+                                                           sorted_logits.size(0), 1).to(device)).to(device)
 
                 for idx, (i, query, query_structure) in enumerate(zip(sorted_logits[:, 0], queries, query_structures)):
                     hard_answer, easy_answer = hard_answers[query], easy_answers[query]
                     num_hard, num_easy = len(hard_answer), len(easy_answer)
 
-                    curr_ranking = ranked_logits[idx, list(easy_answer) + list(hard_answer)]
+                    curr_ranking = ranked_logits[idx, list(easy_answer) + list(hard_answer)].to(device)
                     curr_ranking, indices = torch.sort(curr_ranking)
 
                     masks = indices >= num_easy
                     answer_list = torch.arange(num_hard + num_easy).to(torch.float).to(device)
 
                     curr_ranking = curr_ranking - answer_list + 1
-                    curr_ranking = curr_ranking[masks]
+                    curr_ranking = curr_ranking[masks].to(device)
 
                     mrr = torch.mean(1.0 / curr_ranking).item()
                     hit_at_10 = torch.mean((curr_ranking <= 10).to(torch.float)).item()
