@@ -192,8 +192,7 @@ def main(args):
         if 'n' in task:
             assert False, "GQE doesn't work with negation."
 
-    args.save_path = os.path.join('logs', args.data_path.split('/')[-1], args.tasks, 'vec', "g-{}".format(args.gamma),
-                                  CURR_TIME)
+    args.save_path = os.path.join('runs', CURR_TIME)
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
 
