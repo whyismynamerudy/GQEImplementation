@@ -23,7 +23,8 @@ class TrainDataset(Dataset):
     def __getitem__(self, idx):
         query = self.queries[idx][0]
         query_structure = self.queries[idx][1]
-        tail = np.random.choice(list(self.answer[query]))
+        # tail = np.random.choice(list(self.answer[query]))
+        tail = torch.tensor(list(self.answer[query]), dtype=torch.long).random_(len(self.answer[query])).item()
 
         negative_sample = self.corrupt_sample(query)
         positive_sample = torch.LongTensor([tail])
@@ -46,13 +47,16 @@ class TrainDataset(Dataset):
         size = 0
 
         while size < self.negative_sample_size:
-            negative_sample = np.random.randint(self.num_entities, size=self.negative_sample_size * 2)
-            mask = np.isin(negative_sample, self.answer[query], assume_unique=True, invert=True)
+            # negative_sample = np.random.randint(self.num_entities, size=self.negative_sample_size * 2)
+            # mask = np.isin(negative_sample, self.answer[query], assume_unique=True, invert=True)
+            negative_sample = torch.randint(high=self.num_entities, size=(self.negative_sample_size * 2,))
+            mask = ~torch.isin(negative_sample, torch.tensor(list(self.answer[query]), dtype=torch.long))
             negative_sample = negative_sample[mask]
             samples.append(negative_sample)
             size += negative_sample.size
 
-        negative_sample = torch.from_numpy(np.concatenate(samples)[:self.negative_sample_size])
+        # negative_sample = torch.from_numpy(np.concatenate(samples)[:self.negative_sample_size])
+        negative_sample = torch.cat(samples)[:self.negative_sample_size]
         return negative_sample
 
 
