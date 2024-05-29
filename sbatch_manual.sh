@@ -15,4 +15,4 @@ mkdir -p "$OUTPUT_DIR"
 mkdir -p new-implementation
 
 conda activate gqeimplementation
-python3 main.py --do_train --do_valid --do_test --data_path "FB15k-237" --num_epochs 2 --batch_size 256 --test_batch_size 150 --learning_rate 0.0001
+python3 main.py --do_train --do_valid --do_test --data_path "FB15k-237" --num_epochs 2 --batch_size 64 --test_batch_size 32 --learning_rate 0.0001
