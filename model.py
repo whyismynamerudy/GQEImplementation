@@ -75,7 +75,7 @@ class GQE(nn.Module):
 
         if positive_sample is not None:
             if len(all_intersection_embeddings) > 0:
-                positive_embeddings = torch.index_select(self.entity_embedding.weight, dim=0,
+                positive_embeddings = torch.index_select(self.entity_embedding.weight.to(device), dim=0,
                                                          index=positive_sample[all_idx]).unsqueeze(1)
                 # print(positive_embeddings.shape, all_intersection_embeddings.shape)
                 positive_logit = self.logit(positive_embeddings, all_intersection_embeddings)
@@ -83,7 +83,7 @@ class GQE(nn.Module):
                 positive_logit = torch.Tensor([]).to(device)
 
             if len(all_union_intersection_embeddings) > 0:
-                positive_embeddings = torch.index_select(self.entity_embedding.weight, dim=0,
+                positive_embeddings = torch.index_select(self.entity_embedding.weight.to(device), dim=0,
                                                          index=positive_sample[all_union_idx]).unsqueeze(1).unsqueeze(1)
                 positive_union_logit = \
                     torch.max(self.logit(positive_embeddings, all_union_intersection_embeddings), dim=1)[0]
@@ -97,7 +97,7 @@ class GQE(nn.Module):
         if negative_sample is not None:
             if len(all_intersection_embeddings) > 0:
                 reg = negative_sample[all_idx]
-                negative_embeddings = torch.index_select(self.entity_embedding.weight, dim=0, index=reg.view(-1)).view(
+                negative_embeddings = torch.index_select(self.entity_embedding.weight.to(device), dim=0, index=reg.view(-1)).view(
                     reg.size(0), reg.size(1), -1)
                 negative_logit = self.logit(negative_embeddings, all_intersection_embeddings)
             else:
@@ -105,7 +105,7 @@ class GQE(nn.Module):
 
             if len(all_union_intersection_embeddings) > 0:
                 reg = negative_sample[all_union_idx]
-                negative_embeddings = torch.index_select(self.entity_embedding.weight, dim=0, index=reg.view(-1)).view(
+                negative_embeddings = torch.index_select(self.entity_embedding.weight.to(device), dim=0, index=reg.view(-1)).view(
                     reg.size(0), 1, reg.size(1), -1)
                 negative_union_logit = \
                     torch.max(self.logit(negative_embeddings, all_union_intersection_embeddings), dim=1)[0]
