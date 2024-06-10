@@ -104,7 +104,7 @@ def load_data(path, tasks, args):
             test_hard_answers, test_easy_answers, num_entities, num_relations)
 
 
-# needs to be updated
+# needs to be updated to include test results within results
 def save_model(model, save_dir, results, hyperparameters, model_name: str):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
