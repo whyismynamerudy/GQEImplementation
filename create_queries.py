@@ -149,9 +149,6 @@ def write_links(dataset, ent_out, small_ent_out, name, id2ent, id2rel):
             else:
                 num_more_answer += 1
 
-    # keys = [(q) for q, _ in queries.items()]
-    # print(keys)
-    # print(queries[keys[0][0]])
     textual_queries = {q: {convert_to_textual_query(v, id2ent, id2rel) for v in vals} for q, vals in queries.items()}
     textual_tp_answers = {convert_to_textual_query(q, id2ent, id2rel): {id2ent[a] for a in ans} for q, ans in
                           tp_answers.items()}
@@ -462,5 +459,8 @@ if __name__ == '__main__':
     # args = parse_args()
     # main(args.dataset, args.gen_id, args.reindex, args.save_name)
 
-    test0querues = pickle.load(open('./data/WN18RR-text/test-0-queries.pkl', 'rb'))
-    print(test0querues)
+    # test0querues = pickle.load(open('./data/WN18RR-text/test-0-tp-answers.pkl', 'rb'))
+    # print(test0querues)
+
+    fbtwothreeseven = pickle.load(open("./FB15k-237/ent2id.pkl", 'rb'))
+    print(fbtwothreeseven)
