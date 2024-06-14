@@ -319,7 +319,7 @@ def main(args):
             test_metrics = GQE.evaluate(model, (test_easy_answers, test_hard_answers), test_dataloader, DEVICE)
             print("Test Metrics: ", test_metrics)
 
-    if args.load_model and args.do_test:
+    if args.load_model:
         print("Loaded model and starting testing.")
         model.eval()
 
