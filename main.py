@@ -330,7 +330,7 @@ def main(args):
                                      batch_size=10)
 
         with torch.no_grad():
-            for (_, negatives, flattened_queries, query_structures) in test_dataloader:
+            for (negatives, flattened_queries, _, query_structures) in test_dataloader:
                 # positives.to(DEVICE)
                 negatives.to(DEVICE)
 
