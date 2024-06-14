@@ -323,26 +323,45 @@ def main(args):
         print("Loaded model and starting testing.")
         model.eval()
 
-        sample_queries = random.sample(list(test_queries.keys()), 10)
-        for query in sample_queries:
-            query_structure = query_name_dict[query]
-            flattened_query = flatten_query({query: test_queries[query]})
-            test_dataset = TestDataset(flattened_query, num_entities, num_relations)
-            test_dataloader = DataLoader(test_dataset,
-                                         collate_fn=TestDataset.collate_fn,
-                                         batch_size=1)
+        test_queries = flatten_query(test_queries)
+        test_dataset = TestDataset(test_queries, num_entities, num_relations)
+        test_dataloader = DataLoader(test_dataset,
+                                     collate_fn=TestDataset.collate_fn,
+                                     batch_size=10)
 
-            for (positives, negatives, queries, query_structures) in test_dataloader:
-                print(f"Query: {queries}")
-                for entity, relations in queries:
-                    entity_text = id_to_text(entity.item())
-                    relations_text = [rel_to_text(rel.item()) for rel in relations]
-                    print(f"Textual Query: Entity: {entity_text}, Relations: {relations_text}")
+        with torch.no_grad():
+            for (_, negatives, flattened_queries, query_structures) in test_dataloader:
+                # positives.to(DEVICE)
+                negatives.to(DEVICE)
 
-                scores = model(queries, query_structures)
-                top10_entities = torch.topk(scores, 10)[1].tolist()
-                top10_entities_text = [id_to_text(ent) for ent in top10_entities]
-                print(f"Top 10 entities: {top10_entities_text}")
+                batch_queries_dict, batch_idx_dict = defaultdict(list), defaultdict(list)
+
+                for i, query in enumerate(flattened_queries):  # group queries with the same structure
+                    batch_queries_dict[query_structures[i]].append(query)
+                    batch_idx_dict[query_structures[i]].append(i)
+
+                for qs in batch_queries_dict:
+                    batch_queries_dict[qs] = torch.LongTensor(batch_queries_dict[qs]).to(DEVICE)
+
+                _, negative_logit, idx = model(None, negatives, batch_queries_dict, batch_idx_dict, DEVICE)
+
+                queries = [flattened_queries[i] for i in idx]
+                query_structures = [query_structures[i] for i in idx]
+
+                sorted_logits = torch.argsort(negative_logit, dim=1, descending=True).to(DEVICE)
+                top10_entities = sorted_logits[:, :10].tolist()
+
+                for query, query_structure, top10 in zip(queries, query_structures, top10_entities):
+                    entity = query[0]
+                    relations = query[1:]
+                    entity_text = id2ent[entity.item()]
+                    relations_text = [id2rel[rel.item()] for rel in relations]
+                    print(f"Query: Entity: {entity_text}, Relations: {relations_text}")
+
+                    top10_entities_text = [id2ent[ent] for ent in top10]
+                    print(f"Top 10 entities: {top10_entities_text}")
+
+                break
 
 
 if __name__ == '__main__':
