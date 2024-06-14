@@ -459,8 +459,6 @@ if __name__ == '__main__':
     # args = parse_args()
     # main(args.dataset, args.gen_id, args.reindex, args.save_name)
 
-    # test0querues = pickle.load(open('./data/WN18RR-text/test-0-tp-answers.pkl', 'rb'))
-    # print(test0querues)
-
-    fbtwothreeseven = pickle.load(open("./FB15k-237/ent2id.pkl", 'rb'))
-    print(fbtwothreeseven)
+    nell = pickle.load(open("./NELL/ent2id.pkl", 'rb'))
+    print(nell)
+    print(nell["concept_professionalorganization_daughters_of_american_revolution"])
