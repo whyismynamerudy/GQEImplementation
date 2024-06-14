@@ -354,7 +354,7 @@ def main(args):
                     relations = query[1:]
                     entity_text = id2ent[entity]
                     relations_text = [id2rel[rel] for rel in relations]
-                    print(f"Query: Entity: {entity_text}, Relations: {relations_text}")
+                    print(f"Query: \n Entity: {entity_text}, \n Relations: {relations_text}")
 
                     top10_entities_text = [id2ent[ent] for ent in top10]
                     print(f"Top 10 entities: {top10_entities_text}")
