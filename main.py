@@ -200,10 +200,8 @@ def main(args):
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
 
-    ent2id = pickle.load(open(os.path.join(args.data_path, 'ent2id.pkl'), 'rb'))
     id2ent = pickle.load(open(os.path.join(args.data_path, 'id2ent.pkl'), 'rb'))
     id2rel = pickle.load(open(os.path.join(args.data_path, 'id2rel.pkl'), 'rb'))
-    rel2id = pickle.load(open(os.path.join(args.data_path, 'rel2id.pkl'), 'rb'))
 
     def id_to_text(entity_id):
         return id2ent[entity_id]
@@ -354,8 +352,8 @@ def main(args):
                 for query, query_structure, top10 in zip(queries, query_structures, top10_entities):
                     entity = query[0]
                     relations = query[1:]
-                    entity_text = id2ent[entity.item()]
-                    relations_text = [id2rel[rel.item()] for rel in relations]
+                    entity_text = id2ent[entity]
+                    relations_text = [id2rel[rel] for rel in relations]
                     print(f"Query: Entity: {entity_text}, Relations: {relations_text}")
 
                     top10_entities_text = [id2ent[ent] for ent in top10]
