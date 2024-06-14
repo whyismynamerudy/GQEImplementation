@@ -5,6 +5,7 @@ import argparse
 import os
 import pickle
 import datetime
+import random
 from collections import defaultdict
 import torch
 from torch.utils.data import DataLoader
@@ -46,6 +47,9 @@ def parse_args(args=None):
     parser.add_argument('--do_train', action='store_true', help="do train")
     parser.add_argument('--do_valid', action='store_true', help="do valid")
     parser.add_argument('--do_test', action='store_true', help="do test")
+
+    parser.add_argument('--load_model', action='store_true', help="load model", default=False)
+    parser.add_argument('--model_path', type=str, default='', help="model path when we want to load model")
 
     parser.add_argument('-g', '--gamma', default=12.0, type=float, help="margin in the loss")
     parser.add_argument('--data_path', type=str, default=None, help="KG data path", required=True)
@@ -196,6 +200,17 @@ def main(args):
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
 
+    ent2id = pickle.load(open(os.path.join(args.data_path, 'ent2id.pkl'), 'rb'))
+    id2ent = pickle.load(open(os.path.join(args.data_path, 'id2ent.pkl'), 'rb'))
+    id2rel = pickle.load(open(os.path.join(args.data_path, 'id2rel.pkl'), 'rb'))
+    rel2id = pickle.load(open(os.path.join(args.data_path, 'rel2id.pkl'), 'rb'))
+
+    def id_to_text(entity_id):
+        return id2ent[entity_id]
+
+    def rel_to_text(relation_id):
+        return id2rel[relation_id]
+
     (train_queries, train_answers, valid_queries, valid_hard_answers, valid_easy_answers, test_queries,
      test_hard_answers, test_easy_answers, num_entities, num_relations) = load_data(args.data_path, tasks, args)
 
@@ -260,6 +275,15 @@ def main(args):
         query_name_dict=query_name_dict
     )
     model.to(DEVICE)
+
+    if args.load_model and args.model_path == '':
+        print("If you do --load_model, provide a valid --model_path parameter")
+        return
+
+    if args.load_model:
+        model.load_state_dict(torch.load(args.model_path))
+        print("Loaded model from {}".format(args.model_path))
+
     print("Tasks: ", tasks)
 
     if args.do_train:
@@ -295,7 +319,35 @@ def main(args):
             test_metrics = GQE.evaluate(model, (test_easy_answers, test_hard_answers), test_dataloader, DEVICE)
             print("Test Metrics: ", test_metrics)
 
+    if args.load_model and args.do_test:
+        print("Loaded model and starting testing.")
+        model.eval()
+
+        sample_queries = random.sample(list(test_queries.keys()), 10)
+        for query in sample_queries:
+            query_structure = query_name_dict[query]
+            flattened_query = flatten_query({query: test_queries[query]})
+            test_dataset = TestDataset(flattened_query, num_entities, num_relations)
+            test_dataloader = DataLoader(test_dataset,
+                                         collate_fn=TestDataset.collate_fn,
+                                         batch_size=1)
+
+            for (positives, negatives, queries, query_structures) in test_dataloader:
+                print(f"Query: {queries}")
+                for entity, relations in queries:
+                    entity_text = id_to_text(entity.item())
+                    relations_text = [rel_to_text(rel.item()) for rel in relations]
+                    print(f"Textual Query: Entity: {entity_text}, Relations: {relations_text}")
+
+                scores = model(queries, query_structures)
+                top10_entities = torch.topk(scores, 10)[1].tolist()
+                top10_entities_text = [id_to_text(ent) for ent in top10_entities]
+                print(f"Top 10 entities: {top10_entities_text}")
+
 
 if __name__ == '__main__':
     print("Running at {} on {}".format(CURR_TIME, "CUDA" if torch.cuda.is_available() else "CPU"))
     main(parse_args())
+
+    # tq = pickle.load(open("FB15k-237/test-queries.pkl", "rb"))
+    # print(list(tq.keys()))
