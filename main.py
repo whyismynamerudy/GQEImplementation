@@ -5,7 +5,6 @@ import argparse
 import os
 import pickle
 import datetime
-import random
 from collections import defaultdict
 import torch
 from torch.utils.data import DataLoader
@@ -13,6 +12,23 @@ from dataloader import TrainDataset, TestDataset
 from util import *
 from model import GQE
 from tqdm import tqdm
+import transformers
+
+model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+# tokenizer = AutoTokenizer.from_pretrained(model_id)
+# model = AutoModelForCausalLM.from_pretrained(
+#     model_id,
+#     torch_dtype=torch.bfloat16,
+#     device_map="auto",
+# )
+pipeline = transformers.pipeline(
+    "text-generation",
+    model=model_id,
+    model_kwargs={"torch_dtype": torch.bfloat16},
+    device_map="auto",
+)
+#     token="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"
+# )
 
 query_name_dict = {('e', ('r',)): '1p',
                    ('e', ('r', 'r')): '2p',
@@ -279,7 +295,7 @@ def main(args):
         return
 
     if args.load_model:
-        model.load_state_dict(torch.load(args.model_path))
+        model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
         print("Loaded model from {}".format(args.model_path))
 
     print("Tasks: ", tasks)
@@ -349,6 +365,7 @@ def main(args):
                 sorted_logits = torch.argsort(negative_logit, dim=1, descending=True).to(DEVICE)
                 top10_entities = sorted_logits[:, :10].tolist()
 
+                # Need to alter below to print more than 1p.2p
                 for query, query_structure, top10 in zip(queries, query_structures, top10_entities):
                     entity = query[0]
                     relations = query[1:]
@@ -364,7 +381,34 @@ def main(args):
 
 if __name__ == '__main__':
     print("Running at {} on {}".format(CURR_TIME, "CUDA" if torch.cuda.is_available() else "CPU"))
-    main(parse_args())
+    # main(parse_args())
+
+    messages = [
+        {"role": "system", "content": "You are a pirate chatbot who always responds in pirate speak!"},
+        {"role": "user", "content": "Who are you?"},
+    ]
+
+    input_ids = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        return_tensors="pt"
+    ).to(model.device)
+
+    terminators = [
+        tokenizer.eos_token_id,
+        tokenizer.convert_tokens_to_ids("<|eot_id|>")
+    ]
+
+    outputs = model.generate(
+        input_ids,
+        max_new_tokens=256,
+        eos_token_id=terminators,
+        do_sample=True,
+        temperature=0.6,
+        top_p=0.9,
+    )
+    response = outputs[0][input_ids.shape[-1]:]
+    print(tokenizer.decode(response, skip_special_tokens=True))
 
     # tq = pickle.load(open("FB15k-237/test-queries.pkl", "rb"))
-    # print(list(tq.keys()))
+    # print(tq)
