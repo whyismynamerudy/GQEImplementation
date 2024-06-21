@@ -379,13 +379,14 @@ def main(args):
                     print(f"Query: \n Entity: {entity_text}, \n Relations: {relations_text}")
 
                     top10_entities_text = [id2ent[ent] for ent in top10]
+                    top10_entities_text = [x[8:] for x in top10_entities_text]
                     print(f"Top 10 entities: {top10_entities_text}")
 
                     # prompt = f"Given the query entity '{entity_text}' and relations {relations_text}, rerank the following top 10 entities based on their relevance and likelihood of being the correct answer: {top10_entities_text}. Return the reranked list of entity names."
 
                     messages = [
                         {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for a one-hop and two-hop queries. You only response with re-ranked entities."},
-                        {"role": "user", "content": f"The query is ({entity_text}, {relations_text}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {top10_entities_text}. Return this reranked list, ensuring that your reply is just a permutation of the top 10 tail entities."}
+                        {"role": "user", "content": f"The query is ({entity_text[8:]}, {relations_text[8:]}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {top10_entities_text}. Return this reranked list, ensuring that your reply is a permutation of the top 10 tail entities that were provided above."}
                     ]
 
                     terminators = [
@@ -396,10 +397,10 @@ def main(args):
                     # Generate LLM response
                     llm_response = pipeline(messages, 
                                             eos_token_id=terminators,
-                                            max_new_tokens=256, 
+                                            max_new_tokens=1024, 
                                             do_sample=True, 
-                                            temperature=0.6, 
-                                            top_p=0.9)
+                                            temperature=0.2, 
+                                            top_p=0.1)
 
                     # TODO: eliminate the "concept_" prefix for the entities before passing them onto the LLM and then add them back
 
@@ -407,8 +408,10 @@ def main(args):
 
                     print(f"Reranked entities by LLM: {reranked_entities}")
 
-                    if any([x not in ent2id.keys() for x in reranked_entities]):
-                        continue
+                    reranked_entities = ["concept_"+x for x in reranked_entities]
+
+                    # if any([x not in ent2id.keys() for x in reranked_entities]):
+                    #     continue
 
                     # Convert reranked entities back to IDs
                     reranked_ids = [text_to_id(ent.strip()) for ent in reranked_entities]
@@ -419,10 +422,10 @@ def main(args):
 
 if __name__ == '__main__':
     print("Running at {} on {}".format(CURR_TIME, "CUDA" if torch.cuda.is_available() else "CPU"))
-    # main(parse_args())
+    main(parse_args())
 
-    entid = pickle.load(open("./NELL-betae/ent2id.pkl", 'rb'))
-    print(entid.keys())
+    # entid = pickle.load(open("./NELL-betae/ent2id.pkl", 'rb'))
+    # print(entid.keys())
 
     # messages = [
     # {"role": "system", "content": "You are a pirate chatbot who always responds in pirate speak!"},
