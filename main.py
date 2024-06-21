@@ -13,22 +13,19 @@ from util import *
 from model import GQE
 from tqdm import tqdm
 import transformers
+import ast
+
+from huggingface_hub import login
+login("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")
 
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-# tokenizer = AutoTokenizer.from_pretrained(model_id)
-# model = AutoModelForCausalLM.from_pretrained(
-#     model_id,
-#     torch_dtype=torch.bfloat16,
-#     device_map="auto",
-# )
+
 pipeline = transformers.pipeline(
     "text-generation",
     model=model_id,
     model_kwargs={"torch_dtype": torch.bfloat16},
     device_map="auto",
 )
-#     token="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"
-# )
 
 query_name_dict = {('e', ('r',)): '1p',
                    ('e', ('r', 'r')): '2p',
@@ -218,12 +215,20 @@ def main(args):
 
     id2ent = pickle.load(open(os.path.join(args.data_path, 'id2ent.pkl'), 'rb'))
     id2rel = pickle.load(open(os.path.join(args.data_path, 'id2rel.pkl'), 'rb'))
+    ent2id = pickle.load(open(os.path.join(args.data_path, 'ent2id.pkl'), 'rb'))
+    rel2id = pickle.load(open(os.path.join(args.data_path, 'ent2id.pkl'), 'rb'))
 
     def id_to_text(entity_id):
         return id2ent[entity_id]
 
     def rel_to_text(relation_id):
         return id2rel[relation_id]
+
+    def text_to_id(entity_text):
+        return ent2id[entity_text]
+
+    def text_to_rel(relation_text):
+        return rel2id[relation_text]
 
     (train_queries, train_answers, valid_queries, valid_hard_answers, valid_easy_answers, test_queries,
      test_hard_answers, test_easy_answers, num_entities, num_relations) = load_data(args.data_path, tasks, args)
@@ -376,6 +381,39 @@ def main(args):
                     top10_entities_text = [id2ent[ent] for ent in top10]
                     print(f"Top 10 entities: {top10_entities_text}")
 
+                    # prompt = f"Given the query entity '{entity_text}' and relations {relations_text}, rerank the following top 10 entities based on their relevance and likelihood of being the correct answer: {top10_entities_text}. Return the reranked list of entity names."
+
+                    messages = [
+                        {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for a one-hop and two-hop queries. You only response with re-ranked entities."},
+                        {"role": "user", "content": f"The query is ({entity_text}, {relations_text}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {top10_entities_text}. Return this reranked list, ensuring that your reply is just a permutation of the top 10 tail entities."}
+                    ]
+
+                    terminators = [
+                        pipeline.tokenizer.eos_token_id,
+                        pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+                    ]
+
+                    # Generate LLM response
+                    llm_response = pipeline(messages, 
+                                            eos_token_id=terminators,
+                                            max_new_tokens=256, 
+                                            do_sample=True, 
+                                            temperature=0.6, 
+                                            top_p=0.9)
+
+                    # TODO: eliminate the "concept_" prefix for the entities before passing them onto the LLM and then add them back
+
+                    reranked_entities = ast.literal_eval(llm_response[0]["generated_text"][-1]["content"])
+
+                    print(f"Reranked entities by LLM: {reranked_entities}")
+
+                    if any([x not in ent2id.keys() for x in reranked_entities]):
+                        continue
+
+                    # Convert reranked entities back to IDs
+                    reranked_ids = [text_to_id(ent.strip()) for ent in reranked_entities]
+                    print(f"Reranked entity IDs: {reranked_ids}")
+
                 break
 
 
@@ -383,32 +421,28 @@ if __name__ == '__main__':
     print("Running at {} on {}".format(CURR_TIME, "CUDA" if torch.cuda.is_available() else "CPU"))
     # main(parse_args())
 
-    messages = [
-        {"role": "system", "content": "You are a pirate chatbot who always responds in pirate speak!"},
-        {"role": "user", "content": "Who are you?"},
-    ]
+    entid = pickle.load(open("./NELL-betae/ent2id.pkl", 'rb'))
+    print(entid.keys())
 
-    input_ids = tokenizer.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        return_tensors="pt"
-    ).to(model.device)
+    # messages = [
+    # {"role": "system", "content": "You are a pirate chatbot who always responds in pirate speak!"},
+    # {"role": "user", "content": "Who are you?"},
+    # ]
 
-    terminators = [
-        tokenizer.eos_token_id,
-        tokenizer.convert_tokens_to_ids("<|eot_id|>")
-    ]
+    # terminators = [
+    #     pipeline.tokenizer.eos_token_id,
+    #     pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+    # ]
 
-    outputs = model.generate(
-        input_ids,
-        max_new_tokens=256,
-        eos_token_id=terminators,
-        do_sample=True,
-        temperature=0.6,
-        top_p=0.9,
-    )
-    response = outputs[0][input_ids.shape[-1]:]
-    print(tokenizer.decode(response, skip_special_tokens=True))
+    # outputs = pipeline(
+    #     messages,
+    #     max_new_tokens=256,
+    #     eos_token_id=terminators,
+    #     do_sample=True,
+    #     temperature=0.6,
+    #     top_p=0.9,
+    # )
+    # print(outputs[0]["generated_text"][-1])
 
     # tq = pickle.load(open("FB15k-237/test-queries.pkl", "rb"))
     # print(tq)
