@@ -64,6 +64,8 @@ def parse_args(args=None):
     parser.add_argument('--load_model', action='store_true', help="load model", default=False)
     parser.add_argument('--model_path', type=str, default='', help="model path when we want to load model")
 
+    parser.add_argument('--use_llm', action='store_true', default=False)
+
     parser.add_argument('-g', '--gamma', default=12.0, type=float, help="margin in the loss")
     parser.add_argument('--data_path', type=str, default=None, help="KG data path", required=True)
     parser.add_argument('-n', '--negative_sample_size', default=128, type=int,
@@ -338,8 +340,8 @@ def main(args):
             test_metrics = GQE.evaluate(model, (test_easy_answers, test_hard_answers), test_dataloader, DEVICE)
             print("Test Metrics: ", test_metrics)
 
-    if args.load_model:
-        print("Loaded model and starting testing.")
+    if args.load_model and args.use_llm:
+        print("Loaded model and starting testing. Doing reranking with LLM.")
         model.eval()
 
         test_queries = flatten_query(test_queries)
@@ -348,8 +350,10 @@ def main(args):
                                      collate_fn=TestDataset.collate_fn,
                                      batch_size=10)
 
+        logs = defaultdict(list)
+
         with torch.no_grad():
-            for (negatives, flattened_queries, _, query_structures) in test_dataloader:
+            for (negatives, flattened_queries, queries, query_structures) in tqdm(test_dataloader):
                 # positives.to(DEVICE)
                 negatives.to(DEVICE)
 
@@ -364,60 +368,179 @@ def main(args):
 
                 _, negative_logit, idx = model(None, negatives, batch_queries_dict, batch_idx_dict, DEVICE)
 
-                queries = [flattened_queries[i] for i in idx]
+                queries = [queries[i] for i in idx]
                 query_structures = [query_structures[i] for i in idx]
 
                 sorted_logits = torch.argsort(negative_logit, dim=1, descending=True).to(DEVICE)
                 top10_entities = sorted_logits[:, :10].tolist()
 
+                batch_messages = []
+                batch_wid = []
+
+                def extract_relations(query):
+                    relations = []
+                    def recurse(q):
+                        if isinstance(q, tuple):
+                            for item in q:
+                                if isinstance(item, tuple):
+                                    recurse(item)
+                                elif isinstance(item, int):
+                                    relations.append(item)
+                    recurse(query)
+                    return relations
+
                 # Need to alter below to print more than 1p.2p
                 for query, query_structure, top10 in zip(queries, query_structures, top10_entities):
                     entity = query[0]
-                    relations = query[1:]
+                    relations = extract_relations(query[1:])
+                    # print(relations)
                     entity_text = id2ent[entity]
                     relations_text = [id2rel[rel] for rel in relations]
                     print(f"Query: \n Entity: {entity_text}, \n Relations: {relations_text}")
 
                     top10_entities_text = [id2ent[ent] for ent in top10]
-                    top10_entities_text = [x[8:] for x in top10_entities_text]
                     print(f"Top 10 entities: {top10_entities_text}")
 
+                    top10_entities_text = [x[8:] for x in top10_entities_text]
+                    wid = {i: x for i, x in enumerate(top10_entities_text)}
                     # prompt = f"Given the query entity '{entity_text}' and relations {relations_text}, rerank the following top 10 entities based on their relevance and likelihood of being the correct answer: {top10_entities_text}. Return the reranked list of entity names."
+                    # wid = {i:x for i,x in enumerate(top10_entities_text)}
 
-                    messages = [
-                        {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for a one-hop and two-hop queries. You only response with re-ranked entities."},
-                        {"role": "user", "content": f"The query is ({entity_text[8:]}, {relations_text[8:]}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {top10_entities_text}. Return this reranked list, ensuring that your reply is a permutation of the top 10 tail entities that were provided above."}
-                    ]
+                    # messages = [
+                    #     {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for a one-hop and two-hop queries. You only response with re-ranked entities."},
+                    #     {"role": "user", "content": f"The query is ({entity_text[8:]}, {relations_text[8:]}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {wid}. Here, the entities are structured and id-value pairs. Return the reranked list of entitiy ids only (not the values), ensuring that your reply is a permutation of the top 10 tail entities that were provided above."}
+                    # ]
 
-                    terminators = [
-                        pipeline.tokenizer.eos_token_id,
-                        pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")
-                    ]
+                    # terminators = [
+                    #     pipeline.tokenizer.eos_token_id,
+                    #     pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+                    # ]
 
-                    # Generate LLM response
-                    llm_response = pipeline(messages, 
-                                            eos_token_id=terminators,
-                                            max_new_tokens=1024, 
-                                            do_sample=True, 
-                                            temperature=0.2, 
-                                            top_p=0.1)
+                    # # Generate LLM response
+                    # llm_response = pipeline(messages, 
+                    #                         eos_token_id=terminators,
+                    #                         max_new_tokens=1024, 
+                    #                         do_sample=True, 
+                    #                         temperature=0.2, 
+                    #                         top_p=0.1)
+
+                    message = {
+                    "role": "user",
+                    "content": f"The query is ({entity_text[8:]}, {relations_text[8:]}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {wid}. Here, the entities are structured and id-value pairs. Return the reranked list of entity ids only (not the values), ensuring that your reply is a permutation of the top 10 tail entities that were provided above."
+                    }
+                    batch_messages.append(message)
+                    batch_wid.append(wid)
 
                     # TODO: eliminate the "concept_" prefix for the entities before passing them onto the LLM and then add them back
 
-                    reranked_entities = ast.literal_eval(llm_response[0]["generated_text"][-1]["content"])
+                    # reranked_entities = ast.literal_eval(llm_response[0]["generated_text"][-1]["content"])
 
-                    print(f"Reranked entities by LLM: {reranked_entities}")
+                    # print(f"Reranked entities by LLM: {[wid[x] for x in reranked_entities]}")
 
-                    reranked_entities = ["concept_"+x for x in reranked_entities]
+                    # reranked_entities = ["concept_"+wid[x] for x in reranked_entities]
 
                     # if any([x not in ent2id.keys() for x in reranked_entities]):
                     #     continue
 
                     # Convert reranked entities back to IDs
-                    reranked_ids = [text_to_id(ent.strip()) for ent in reranked_entities]
-                    print(f"Reranked entity IDs: {reranked_ids}")
+                    # reranked_ids = [text_to_id(ent.strip()) for ent in reranked_entities]
+                    # print(f"Reranked entity IDs: {reranked_ids}")
 
-                break
+                system_message = {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for one-hop and two-hop queries. You only respond with re-ranked entities."}
+            
+                terminators = [
+                    pipeline.tokenizer.eos_token_id,
+                    pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+                ]
+
+                # Generate LLM responses for the batch
+                llm_responses = pipeline(
+                    [system_message] + batch_messages,
+                    eos_token_id=terminators,
+                    max_new_tokens=1024,
+                    do_sample=True,
+                    temperature=0.2,
+                    top_p=0.1,
+                    num_return_sequences=len(batch_messages)
+                )
+
+                new_sorted_logits = sorted_logits.clone()
+
+                for i, (response, wid) in enumerate(zip(llm_responses, batch_wid)):
+                    try:
+                        reranked_entities = ast.literal_eval(response["generated_text"][-1]["content"])
+                        print(f"Query {i + 1} - Reranked entities by LLM: {[wid[x] for x in reranked_entities]}")
+
+                        reranked_entities = ["concept_" + wid[x] for x in reranked_entities]
+                        reranked_ids = [text_to_id(ent.strip()) for ent in reranked_entities if ent.strip() in ent2id.keys()]
+
+                        print(f"Query {i + 1} - Reranked entity IDs: {reranked_entities}, {reranked_ids}")
+
+                        # new_sorted_logits[i, :10] = torch.tensor(reranked_ids, device=DEVICE)
+
+                        if len(reranked_ids) == 10:
+                            new_sorted_logits[i, :10] = torch.tensor(reranked_ids, device=DEVICE)
+                        else:
+                            print(f"Warning: Query {i + 1} returned {len(reranked_ids)} entities instead of 10. Skipping reranking for this query.")
+
+                    except (SyntaxError, ValueError) as e:
+                        print(f"Error processing response for query {i + 1}: {e}")
+                        print(f"Raw response: {response['generated_text'][-1]['content']}")
+
+                sorted_logits = new_sorted_logits
+                ranked_logits = sorted_logits.clone().to(torch.float).to(DEVICE)
+                ranked_logits = ranked_logits.scatter_(1,
+                                                       sorted_logits,
+                                                       torch.arange(model.num_entities).to(torch.float).repeat(
+                                                           sorted_logits.size(0), 1).to(DEVICE)).to(DEVICE)
+
+                for idx, (i, query, query_structure) in enumerate(zip(sorted_logits[:, 0], queries, query_structures)):
+                    hard_answer, easy_answer = test_hard_answers[query], test_easy_answers[query]
+                    num_hard, num_easy = len(hard_answer), len(easy_answer)
+
+                    curr_ranking = ranked_logits[idx, list(easy_answer) + list(hard_answer)].to(DEVICE)
+                    curr_ranking, indices = torch.sort(curr_ranking)
+
+                    masks = indices >= num_easy
+                    answer_list = torch.arange(num_hard + num_easy).to(torch.float).to(DEVICE)
+
+                    curr_ranking = curr_ranking - answer_list + 1
+                    curr_ranking = curr_ranking[masks].to(DEVICE)
+
+                    mrr = torch.mean(1.0 / curr_ranking).item()
+                    hit_at_10 = torch.mean((curr_ranking <= 10).to(torch.float)).item()
+
+                    logs[query_structure].append({
+                        'MRR': mrr,
+                        'HITS10': hit_at_10,
+                        'num_hard_answer': num_hard,
+                    })
+
+        metrics = defaultdict(lambda: defaultdict(int))
+        for query_structure in logs:
+            for metric in logs[query_structure][0].keys():
+                if metric in ['num_hard_answer']:
+                    continue
+                metrics[query_structure][metric] = sum([log[metric] for log in logs[query_structure]]) / len(
+                    logs[query_structure])
+            metrics[query_structure]['num_queries'] = len(logs[query_structure])
+
+        # test_metrics = GQE.evaluate_with_llm(model, (test_easy_answers, test_hard_answers), test_dataloader, DEVICE, pipeline, id2ent, id2rel, text_to_id)
+        print("TEST METRICS: Loading in model for testing: ", metrics)
+
+    elif args.load_model:
+        model.eval()
+        print("WITHOUT RERANKING USING LLM")
+
+        test_queries = flatten_query(test_queries)
+        test_dataset = TestDataset(test_queries, num_entities, num_relations)
+        test_dataloader = DataLoader(test_dataset,
+                                     collate_fn=TestDataset.collate_fn,
+                                     batch_size=10)
+
+        test_metrics = GQE.evaluate(model, (test_easy_answers, test_hard_answers), test_dataloader, DEVICE)
+        print("Test Metrics: ", test_metrics)
+
 
 
 if __name__ == '__main__':

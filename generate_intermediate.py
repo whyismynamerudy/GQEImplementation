@@ -4,6 +4,7 @@ Generate intermediate queries given dataset
 import pickle
 from collections import defaultdict
 import argparse
+from tqdm import tqdm
 
 
 def parse_args():
@@ -32,19 +33,65 @@ def load_data(data_path):
     return (train_queries, train_answers, ent2id, id2ent, rel2id, id2rel)
 
 
-def create_kg(data_path):
+# no need to convert to text here, leave as int for faster computation?
+def create_kg(data_path, id2ent, id2rel):
     kg_edges = defaultdict(lambda: defaultdict(set))
     with open(f'{data_path}/train.txt', 'r') as f:
         for line in f:
             h, r, t = line.strip().split('\t')
-            kg_edges[ent2id[h]][rel2id[r]].add(ent2id[t])
+            kg_edges[id2ent[int(h)]][id2rel[int(r)]].add(id2ent[int(t)])
 
     return kg_edges
 
 
 def main(args):
-    data = load_data(args.data_path)
-    kg = create_kg(args.data_path)
+    (train_queries, train_answers, ent2id, id2ent, rel2id, id2rel) = load_data(args.data_path)
+    # print(ent2id)
+    # print(id2ent)
+    print("Loaded data.")
+
+
+    kg_edges = create_kg(args.data_path, id2ent, id2rel)
+    print("Created KG.")
+    print(kg_edges)
+    return
+
+    intermediate_entities = defaultdict(lambda: defaultdict(set))
+
+    qss = [('e', ('r', 'r')), ('e', ('r', 'r', 'r'))]   # 2p, 3p
+
+    for query_structure in tqdm(qss):
+        queries = train_queries[query_structure]
+
+        for query in tqdm(queries):
+            start_entity, relations = query
+
+            # entities after first hop
+            first_hop_entities = kg_edges[start_entity][relations[0]]
+
+            if query_structure == ('e', ('r', 'r')):
+                # 2p
+                second_hop_entities = set()
+                for e in first_hop_entities:
+                    second_hop_entities.update(kg_edges[e][rel2])
+
+                verified_first_hop = set()
+                for e in first_hop_entities:
+                    if kg_edges[e][rel2] & train_answers[query]:
+                        verified_first_hop.add(e)
+
+                intermediate_entities[query] = verified_first_hop
+
+        named_intermediate_entities = {
+            (id2ent[q[0]], (id2rel[q[1][0]], id2rel[q[1][1]])): {id2ent[e] for e in ents}
+            for q, ents in intermediate_entities.items()
+        }
+
+        with open(f'{args.data_path}/train-intermediate-entities.pkl', 'wb') as f:
+            pickle.dump(named_intermediate_entities, f)
+
+        return named_intermediate_entities
+
 
 
 if __name__=="__main__":
@@ -57,5 +104,7 @@ if __name__=="__main__":
     # with open("train_answers_output.txt", "w") as f_a:
     #     f_a.write(str(train_a))
 
-    main(parse_args())
+    # first, handle 2p and 3p queries. 
+
+    print(main(parse_args()))
     

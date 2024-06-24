@@ -277,3 +277,110 @@ class GQE(nn.Module):
         #     # If the dataloader is exhausted, reinitialize it
         #     dataloader = iter(dataloader)
         #     positives, negatives, flattened_queries, query_structures = next(dataloader)
+        model.eval()
+        (easy_answers, hard_answers) = answers
+        logs = defaultdict(list)
+
+        with torch.no_grad():
+            for (negatives, flattened_queries, queries, query_structure) in tqdm(dataloader):
+                batch_queries_dict, batch_idx_dict = defaultdict(list), defaultdict(list)
+
+                for i, query in enumerate(flattened_queries):
+                    batch_queries_dict[query_structure[i]].append(query)
+                    batch_idx_dict[query_structure[i]].append(i)
+
+                for qs in batch_queries_dict:
+                    batch_queries_dict[qs] = torch.LongTensor(batch_queries_dict[qs]).to(device)
+
+                negatives.to(device)
+
+                _, negative_logit, idx = model(None, negatives, batch_queries_dict, batch_idx_dict, device)
+
+                queries = [queries[i] for i in idx]
+                query_structures = [query_structure[i] for i in idx]
+                sorted_logits = torch.argsort(negative_logit, dim=1, descending=True).to(device)
+
+                top10_entities = sorted_logits[:, :10].tolist()
+                batch_messages = []
+                batch_wid = []
+
+                for query, qs, top10 in zip(queries, query_structures, top10_entities):
+                    entity = query[0]
+                    relations = query[1:]
+                    entity_text = id2ent[entity]
+                    relations_text = [id2rel[rel] for rel in relations]
+                    top10_entities_text = [id2ent[ent][8:] for ent in top10]
+                    wid = {i: x for i, x in enumerate(top10_entities_text)}
+                    
+                    message = {
+                        "role": "user",
+                        "content": f"The query is ({entity_text[8:]}, {relations_text[8:]}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {wid}. Here, the entities are structured and id-value pairs. Return the reranked list of entity ids only (not the values), ensuring that your reply is a permutation of the top 10 tail entities that were provided above."
+                    }
+                    batch_messages.append(message)
+                    batch_wid.append(wid)
+
+                system_message = {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for one-hop and two-hop queries. You only respond with re-ranked entities."}
+            
+                terminators = [
+                    pipeline.tokenizer.eos_token_id,
+                    pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+                ]
+
+                llm_responses = pipeline(
+                    [system_message] + batch_messages,
+                    eos_token_id=terminators,
+                    max_new_tokens=1024,
+                    do_sample=True,
+                    temperature=0.2,
+                    top_p=0.1,
+                    num_return_sequences=len(batch_messages)
+                )
+
+                new_sorted_logits = sorted_logits.clone()
+
+                for i, (response, wid) in enumerate(zip(llm_responses, batch_wid)):
+                    try:
+                        reranked_entities = ast.literal_eval(response["generated_text"][-1]["content"])
+                        reranked_entities = ["concept_" + wid[x] for x in reranked_entities]
+                        reranked_ids = [text_to_id(ent.strip()) for ent in reranked_entities]
+                        new_sorted_logits[i, :10] = torch.tensor(reranked_ids, device=device)
+                    except (SyntaxError, ValueError) as e:
+                        print(f"Error processing response for query {i + 1}: {e}")
+
+                sorted_logits = new_sorted_logits
+                ranked_logits = sorted_logits.clone().to(torch.float).to(device)
+                ranked_logits = ranked_logits.scatter_(1,
+                                                    sorted_logits,
+                                                    torch.arange(model.num_entities).to(torch.float).repeat(
+                                                        sorted_logits.size(0), 1).to(device)).to(device)
+
+                for idx, (i, query, query_structure) in enumerate(zip(sorted_logits[:, 0], queries, query_structures)):
+                    hard_answer, easy_answer = hard_answers[query], easy_answers[query]
+                    num_hard, num_easy = len(hard_answer), len(easy_answer)
+
+                    curr_ranking = ranked_logits[idx, list(easy_answer) + list(hard_answer)].to(device)
+                    curr_ranking, indices = torch.sort(curr_ranking)
+                    masks = indices >= num_easy
+                    answer_list = torch.arange(num_hard + num_easy).to(torch.float).to(device)
+                    curr_ranking = curr_ranking - answer_list + 1
+                    curr_ranking = curr_ranking[masks].to(device)
+
+                    mrr = torch.mean(1.0 / curr_ranking).item()
+                    hit_at_10 = torch.mean((curr_ranking <= 10).to(torch.float)).item()
+
+                    logs[query_structure].append({
+                        'MRR': mrr,
+                        'HITS10': hit_at_10,
+                        'num_hard_answer': num_hard,
+                    })
+
+        metrics = defaultdict(lambda: defaultdict(int))
+        for query_structure in logs:
+            for metric in logs[query_structure][0].keys():
+                if metric in ['num_hard_answer']:
+                    continue
+                metrics[query_structure][metric] = sum([log[metric] for log in logs[query_structure]]) / len(
+                    logs[query_structure])
+            metrics[query_structure]['num_queries'] = len(logs[query_structure])
+
+        return metrics
