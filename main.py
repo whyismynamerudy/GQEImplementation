@@ -351,6 +351,7 @@ def main(args):
                                      batch_size=10)
 
         logs = defaultdict(list)
+        skipped = []
 
         with torch.no_grad():
             for (negatives, flattened_queries, queries, query_structures) in tqdm(test_dataloader):
@@ -401,7 +402,7 @@ def main(args):
                     top10_entities_text = [id2ent[ent] for ent in top10]
                     print(f"Top 10 entities: {top10_entities_text}")
 
-                    top10_entities_text = [x[8:] for x in top10_entities_text]
+                    # top10_entities_text = [x[8:] for x in top10_entities_text]
                     wid = {i: x for i, x in enumerate(top10_entities_text)}
                     # prompt = f"Given the query entity '{entity_text}' and relations {relations_text}, rerank the following top 10 entities based on their relevance and likelihood of being the correct answer: {top10_entities_text}. Return the reranked list of entity names."
                     # wid = {i:x for i,x in enumerate(top10_entities_text)}
@@ -471,7 +472,8 @@ def main(args):
                         reranked_entities = ast.literal_eval(response["generated_text"][-1]["content"])
                         print(f"Query {i + 1} - Reranked entities by LLM: {[wid[x] for x in reranked_entities]}")
 
-                        reranked_entities = ["concept_" + wid[x] for x in reranked_entities]
+                        # reranked_entities = ["concept_" + wid[x] for x in reranked_entities]
+                        reranked_entities = [wid[x] for x in reranked_entities]
                         reranked_ids = [text_to_id(ent.strip()) for ent in reranked_entities if ent.strip() in ent2id.keys()]
 
                         print(f"Query {i + 1} - Reranked entity IDs: {reranked_entities}, {reranked_ids}")
@@ -482,6 +484,7 @@ def main(args):
                             new_sorted_logits[i, :10] = torch.tensor(reranked_ids, device=DEVICE)
                         else:
                             print(f"Warning: Query {i + 1} returned {len(reranked_ids)} entities instead of 10. Skipping reranking for this query.")
+                            skipped.append(f"Skipped Query {i + 1} - Reranked entity IDs: {reranked_entities}, {reranked_ids}")
 
                     except (SyntaxError, ValueError) as e:
                         print(f"Error processing response for query {i + 1}: {e}")
@@ -527,6 +530,7 @@ def main(args):
 
         # test_metrics = GQE.evaluate_with_llm(model, (test_easy_answers, test_hard_answers), test_dataloader, DEVICE, pipeline, id2ent, id2rel, text_to_id)
         print("TEST METRICS: Loading in model for testing: ", metrics)
+        print(skipped)
 
     elif args.load_model:
         model.eval()

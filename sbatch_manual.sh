@@ -2,7 +2,7 @@
 #SBATCH --partition=ashton
 #SBACTH --qos=ashton
 #SBATCH --job-name=mongarud-manual
-#SBATCH --output=manual/log_1p2p3p_with_llm_and_skipping_%j.log      # Standard output and error log
+#SBATCH --output=manual/log_1p2p3p_with_llm_no_prefix_removal_and_id-reranking_%j.log      # Standard output and error log
 #SBATCH --time=12:00:00
 #SBATCH --mem=20G
 #SBATCH --gres=gpu:1

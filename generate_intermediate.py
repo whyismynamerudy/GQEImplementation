@@ -131,12 +131,6 @@ def main(args):
     with open(f'{args.data_path}/train-intermediate-entities-named.pkl', 'wb') as f:
         pickle.dump(named_intermediate_entities, f)
 
-    count = 0
-    for k in named_intermediate_entities:
-        print(named_intermediate_entities[k])
-        count += 1
-        if count == 5:
-            break
 
     count = 0
     for k in intermediate_entities_dict:
@@ -161,13 +155,23 @@ if __name__=="__main__":
 
     # first, handle 2p and 3p queries. 
 
-    main(parse_args())
+    # main(parse_args())
 
-    train_i = pickle.load(open("./NELL-betae/train-intermediate-entities-named.pkl", "rb"))
+    named_intermediate_entities = pickle.load(open("./NELL-betae/train-intermediate-entities-named.pkl", "rb"))
     with open("train_queries_intermediate-named.txt", "w") as f_q:
-        f_q.write(str(train_i))
+        count = 0
+        for k in named_intermediate_entities:
+            print(k, named_intermediate_entities[k])
+            count += 1
+            if count == 5:
+                break
 
-    train_i = pickle.load(open("./NELL-betae/train-intermediate-entities-id.pkl", "rb"))
+    intermediate_entities_dict = pickle.load(open("./NELL-betae/train-intermediate-entities-id.pkl", "rb"))
     with open("train_queries_intermediate-id.txt", "w") as f_q:
-        f_q.write(str(train_i))
-    
+        count = 0
+        for k in intermediate_entities_dict:
+            print(l, intermediate_entities_dict[k])
+            count += 1
+            if count == 5:
+                break
+        
