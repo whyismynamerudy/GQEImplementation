@@ -5,7 +5,7 @@ import argparse
 import os
 import pickle
 import datetime
-from collections import defaultdict
+from collections import defaultdict, Counter
 import torch
 from torch.utils.data import DataLoader
 from dataloader import TrainDataset, TestDataset
@@ -32,13 +32,13 @@ query_name_dict = {('e', ('r',)): '1p',
                    ('e', ('r', 'r', 'r')): '3p',
                    (('e', ('r',)), ('e', ('r',))): '2i',
                    (('e', ('r',)), ('e', ('r',)), ('e', ('r',))): '3i',
-                   ((('e', ('r',)), ('e', ('r',))), ('r',)): 'ip',
-                   (('e', ('r', 'r')), ('e', ('r',))): 'pi',
+                   ((('e', ('r',)), ('e', ('r',))), ('r',)): 'ip', # to do 
+                   (('e', ('r', 'r')), ('e', ('r',))): 'pi',    # to do
                    (('e', ('r',)), ('e', ('r', 'n'))): '2in',
                    (('e', ('r',)), ('e', ('r',)), ('e', ('r', 'n'))): '3in',
-                   ((('e', ('r',)), ('e', ('r', 'n'))), ('r',)): 'inp',
-                   (('e', ('r', 'r')), ('e', ('r', 'n'))): 'pin',
-                   (('e', ('r', 'r', 'n')), ('e', ('r',))): 'pni',
+                   ((('e', ('r',)), ('e', ('r', 'n'))), ('r',)): 'inp', # to do 
+                   (('e', ('r', 'r')), ('e', ('r', 'n'))): 'pin', # to do
+                   (('e', ('r', 'r', 'n')), ('e', ('r',))): 'pni', # to do 
                    (('e', ('r',)), ('e', ('r',)), ('u',)): '2u-DNF',
                    ((('e', ('r',)), ('e', ('r',)), ('u',)), ('r',)): 'up-DNF',
                    ((('e', ('r', 'n')), ('e', ('r', 'n'))), ('n',)): '2u-DM',
@@ -50,6 +50,36 @@ all_tasks = list(name_query_dict.keys())  # ['1p', '2p', '3p', '2i', '3i', 'ip',
 
 CURR_TIME = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.cuda.empty_cache()
+
+
+def get_path_based_context(query, all_queries, k=3):
+    paths = []
+    for q in all_queries:
+        if q[0] == query[0] and len(q) == len(query) and q != query:
+            paths.append(q)
+    return paths[:k]
+
+
+# limit to current relation - give possible intermediate entites - 1p.2p.3p
+def get_entity_neighborhood(entity, relation, all_queries, k=5):
+    neighbors = set()
+    for q in all_queries:
+        if q[0] == entity and q[1][0] == relation:
+            neighbors.add(q[-1])
+    return list(neighbors)[:k]
+
+
+# relations that freq appear together with the query relation in the KG
+# more context about the structure and patterns 
+def get_relation_co_occurrence(relation, all_queries, k=3):
+    co_occurrences = Counter()
+    for q in all_queries:
+        if relation in q[1:-1]:
+            for r in q[1:-1]:
+                if r != relation:
+                    co_occurrences[r] += 1
+    return co_occurrences.most_common(k)
 
 
 def parse_args(args=None):
@@ -62,6 +92,7 @@ def parse_args(args=None):
     parser.add_argument('--do_test', action='store_true', help="do test")
 
     parser.add_argument('--load_model', action='store_true', help="load model", default=False)
+    parser.add_argument('--load_test_size', default=10, type=int, help="batch size for test set when we load model")
     parser.add_argument('--model_path', type=str, default='', help="model path when we want to load model")
 
     parser.add_argument('--use_llm', action='store_true', default=False)
@@ -348,10 +379,16 @@ def main(args):
         test_dataset = TestDataset(test_queries, num_entities, num_relations)
         test_dataloader = DataLoader(test_dataset,
                                      collate_fn=TestDataset.collate_fn,
-                                     batch_size=10)
+                                     batch_size=args.load_test_size)
 
         logs = defaultdict(list)
         skipped = []
+
+        # test_queries consists of (q, qs) pairs
+        all_queries = [q for q, _ in test_queries]
+        all_structures = [s for _, s in test_queries]
+
+        print(all_queries[:10])
 
         with torch.no_grad():
             for (negatives, flattened_queries, queries, query_structures) in tqdm(test_dataloader):
@@ -394,60 +431,62 @@ def main(args):
                 for query, query_structure, top10 in zip(queries, query_structures, top10_entities):
                     entity = query[0]
                     relations = extract_relations(query[1:])
-                    # print(relations)
+                  
                     entity_text = id2ent[entity]
                     relations_text = [id2rel[rel] for rel in relations]
-                    print(f"Query: \n Entity: {entity_text}, \n Relations: {relations_text}")
+                    print(f"Query: {query} \nEntity: {entity_text}, \nRelations: {relations_text}, \n")
+
+
+                    # node_degree = get_node_degree(entity, all_queries)
+                    path_context = get_path_based_context(query, all_queries)
+                    entity_neighborhood = get_entity_neighborhood(entity, relations[0], all_queries)
+                    # relation_co_occurrence = get_relation_co_occurrence(relations[0], all_queries)
+
+                    pbc = ', '.join([' -> '.join([id2ent[e[0] if isinstance(e, tuple) else e] for e in path]) for path in path_context])
+                    en = ', '.join([id2ent[e[0] if isinstance(e, tuple) else e] for e in entity_neighborhood])
+                    # rco = ', '.join([f"{id2rel[rel]} ({count})" for rel, count in relation_co_occurrence])
+
+                    # print("Node Degree: ", node_degree)
+                    print("Path Context: ", pbc)
+                    print("Entity Neighborhood: ", en)
+                    # print("Relation Co Occurance: ", rco)
+
 
                     top10_entities_text = [id2ent[ent] for ent in top10]
                     print(f"Top 10 entities: {top10_entities_text}")
 
-                    # top10_entities_text = [x[8:] for x in top10_entities_text]
                     wid = {i: x for i, x in enumerate(top10_entities_text)}
-                    # prompt = f"Given the query entity '{entity_text}' and relations {relations_text}, rerank the following top 10 entities based on their relevance and likelihood of being the correct answer: {top10_entities_text}. Return the reranked list of entity names."
-                    # wid = {i:x for i,x in enumerate(top10_entities_text)}
 
-                    # messages = [
-                    #     {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for a one-hop and two-hop queries. You only response with re-ranked entities."},
-                    #     {"role": "user", "content": f"The query is ({entity_text[8:]}, {relations_text[8:]}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {wid}. Here, the entities are structured and id-value pairs. Return the reranked list of entitiy ids only (not the values), ensuring that your reply is a permutation of the top 10 tail entities that were provided above."}
-                    # ]
+                    # prompt = f"The query is ({entity_text}, {relations_text}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {wid}. Here, the entities are structured and id-value pairs. Return the reranked list of entity ids only (not the values), ensuring that your reply is a permutation of the top 10 tail entities that were provided above."
 
-                    # terminators = [
-                    #     pipeline.tokenizer.eos_token_id,
-                    #     pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")
-                    # ]
+                    # removed from prompt to see if this takes less gpu
+                    #1. Node degree of {entity_text}: {node_degree}
+                    #2. Path-based context:  {pbc}
 
-                    # # Generate LLM response
-                    # llm_response = pipeline(messages, 
-                    #                         eos_token_id=terminators,
-                    #                         max_new_tokens=1024, 
-                    #                         do_sample=True, 
-                    #                         temperature=0.2, 
-                    #                         top_p=0.1)
+                    prompt = f"\
+                    The query is ({entity_text}, {relations_text}, ?).\
+                    Additional Context:\
+                    1. Entity neighborhood of {entity_text}: {en}\
+                    2. Relations that co-occur with {relations_text}: {rco}\
+                    Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer, considering the additional context provided: {wid}\
+                    Return the reranked list of entity ids only (not the values) of size 10, ensuring that your reply is a permutation of the tail entity ids that were provided above. Do not output anything other than the list.\
+                    "
+
+                    # put idea of context and use context into system message. put geenral instructions into the system message
+                    # sort messages by length and group similar length messages 
 
                     message = {
                     "role": "user",
-                    "content": f"The query is ({entity_text[8:]}, {relations_text[8:]}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {wid}. Here, the entities are structured and id-value pairs. Return the reranked list of entity ids only (not the values), ensuring that your reply is a permutation of the top 10 tail entities that were provided above."
+                    "content": prompt
                     }
                     batch_messages.append(message)
                     batch_wid.append(wid)
 
-                    # TODO: eliminate the "concept_" prefix for the entities before passing them onto the LLM and then add them back
-
-                    # reranked_entities = ast.literal_eval(llm_response[0]["generated_text"][-1]["content"])
-
-                    # print(f"Reranked entities by LLM: {[wid[x] for x in reranked_entities]}")
-
-                    # reranked_entities = ["concept_"+wid[x] for x in reranked_entities]
-
-                    # if any([x not in ent2id.keys() for x in reranked_entities]):
-                    #     continue
-
-                    # Convert reranked entities back to IDs
-                    # reranked_ids = [text_to_id(ent.strip()) for ent in reranked_entities]
-                    # print(f"Reranked entity IDs: {reranked_ids}")
-
-                system_message = {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for one-hop and two-hop queries. You only respond with re-ranked entities."}
+                system_message = {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for some logical queries. \
+                Queries are structured as follows, where the first element is the head and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. \
+                The correct answer to each query is found by starting at the head entity and traversing the graph along the edges specified by the relations, in the order they're given. \
+                The '?' entity candidates are structured and id-value pairs. You only respond with the reranked list of entity ids for each query.\
+                The queries input are in batches, and you have to rerank candidates individually for each query."}
             
                 terminators = [
                     pipeline.tokenizer.eos_token_id,
@@ -458,7 +497,7 @@ def main(args):
                 llm_responses = pipeline(
                     [system_message] + batch_messages,
                     eos_token_id=terminators,
-                    max_new_tokens=1024,
+                    max_new_tokens=128, # reduced from 1024 to 128, try with larger batch size -> not this, padding max_length
                     do_sample=True,
                     temperature=0.2,
                     top_p=0.1,
@@ -470,10 +509,10 @@ def main(args):
                 for i, (response, wid) in enumerate(zip(llm_responses, batch_wid)):
                     try:
                         reranked_entities = ast.literal_eval(response["generated_text"][-1]["content"])
-                        print(f"Query {i + 1} - Reranked entities by LLM: {[wid[x] for x in reranked_entities]}")
+                        print(f"Query {i + 1} - Reranked entities by LLM: {reranked_entities}")
 
                         # reranked_entities = ["concept_" + wid[x] for x in reranked_entities]
-                        reranked_entities = [wid[x] for x in reranked_entities]
+                        reranked_entities = [wid[x] for x in reranked_entities if x in wid]
                         reranked_ids = [text_to_id(ent.strip()) for ent in reranked_entities if ent.strip() in ent2id.keys()]
 
                         print(f"Query {i + 1} - Reranked entity IDs: {reranked_entities}, {reranked_ids}")
