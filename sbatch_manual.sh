@@ -2,7 +2,7 @@
 #SBATCH --partition=ashton
 #SBACTH --qos=ashton
 #SBATCH --job-name=mongarud-manual
-#SBATCH --output=manual/log_1p2p3p_with_llm_structural_info_1_batchsize_40mem_better_prompt_%j.log      # Standard output and error log
+#SBATCH --output=manual/log_1p2p3p_with_llm_structural_info_1_batchsize_shorter_prompt_justPBC_%j.log      # Standard output and error log
 #SBATCH --time=24:00:00
 #SBATCH --mem=40G
 #SBATCH --gres=gpu:1

@@ -52,16 +52,22 @@ CURR_TIME = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.cuda.empty_cache()
 
-
-def get_path_based_context(query, all_queries, k=3):
+# "paths" that start at the same entity and have same length
+# paths are constructed by finding queries that start at the same entity and
+# have the same length, and by getting its answer and appending it to the query
+# to get the final path
+def get_path_based_context(query, all_queries, answers, k=3):
     paths = []
     for q in all_queries:
         if q[0] == query[0] and len(q) == len(query) and q != query:
-            paths.append(q)
+            if q in answers:
+                full_path = q + (next(iter(answers[q])),)
+                paths.append(full_path)
+    print("PATHS: ", paths)
     return paths[:k]
 
 
-# limit to current relation - give possible intermediate entites - 1p.2p.3p
+# entity neightborhood of the entity w.r.t to first relation in the query
 def get_entity_neighborhood(entity, relation, all_queries, k=5):
     neighbors = set()
     for q in all_queries:
@@ -427,6 +433,23 @@ def main(args):
                     recurse(query)
                     return relations
 
+                def visualize_pbc(pbc, id2ent, id2rel):
+                    print("PBC IN FUNC: ", pbc)
+                    if not pbc or len(pbc) < 3:
+                        return
+
+                    h, rels, t = pbc 
+                    # return [
+                    #     id2ent[h],
+                    #     [id2rel[r] for r in rels],
+                    #     id2ent[t]
+                    # ]
+                    head_text = id2ent.get(h, "Unknown Entity")
+                    relations_text = [id2rel.get(r, "Unknown Relation") for r in rels]
+                    tail_text = id2ent.get(t, "Unknown Entity")
+
+                    return f"{head_text} -> {' -> '.join(relations_text)} -> {tail_text}"
+
                 # Need to alter below to print more than 1p.2p
                 for query, query_structure, top10 in zip(queries, query_structures, top10_entities):
                     entity = query[0]
@@ -434,43 +457,49 @@ def main(args):
                   
                     entity_text = id2ent[entity]
                     relations_text = [id2rel[rel] for rel in relations]
-                    print(f"Query: {query} \nEntity: {entity_text}, \nRelations: {relations_text}, \n")
+                    # print(f"Query: {query} \nEntity: {entity_text}, \nRelations: {relations_text}, \n")
 
 
                     # node_degree = get_node_degree(entity, all_queries)
-                    path_context = get_path_based_context(query, all_queries)
+                    path_context = get_path_based_context(query, all_queries, test_hard_answers)
                     entity_neighborhood = get_entity_neighborhood(entity, relations[0], all_queries)
                     # relation_co_occurrence = get_relation_co_occurrence(relations[0], all_queries)
 
-                    pbc = ', '.join([' -> '.join([id2ent[e[0] if isinstance(e, tuple) else e] for e in path]) for path in path_context])
+                    # pbc = ', '.join([' -> '.join([id2ent[e[0] if isinstance(e, tuple) else e] for e in path]) for path in path_context])
+                    pbc = [visualize_pbc(pbc, id2ent, id2rel) for pbc in path_context]
                     en = ', '.join([id2ent[e[0] if isinstance(e, tuple) else e] for e in entity_neighborhood])
                     # rco = ', '.join([f"{id2rel[rel]} ({count})" for rel, count in relation_co_occurrence])
 
                     # print("Node Degree: ", node_degree)
-                    print("Path Context: ", pbc)
-                    print("Entity Neighborhood: ", en)
+                    # print("Path Context: ", pbc)
+                    # print("Entity Neighborhood: ", en)
                     # print("Relation Co Occurance: ", rco)
 
 
                     top10_entities_text = [id2ent[ent] for ent in top10]
-                    print(f"Top 10 entities: {top10_entities_text}")
+                    # print(f"Top 10 entities: {top10_entities_text}")
 
                     wid = {i: x for i, x in enumerate(top10_entities_text)}
 
                     # prompt = f"The query is ({entity_text}, {relations_text}, ?), where the first element is the head, and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer: {wid}. Here, the entities are structured and id-value pairs. Return the reranked list of entity ids only (not the values), ensuring that your reply is a permutation of the top 10 tail entities that were provided above."
 
-                    # removed from prompt to see if this takes less gpu
-                    #1. Node degree of {entity_text}: {node_degree}
-                    #2. Path-based context:  {pbc}
+                    # prompt = f"\
+                    # Query:({entity_text}, {relations_text}, ?).\
+                    # 1. Entity Neighborhood: {en}\
+                    # 2. Path-Based Context: {pbc}\
+                    # Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer, considering the additional context provided: {wid}\
+                    # Return the reranked list of entity ids only (not the values) of size 10, ensuring that your reply is a permutation of the tail entity ids that were provided above. Do not output anything other than the list.\
+                    # "
 
                     prompt = f"\
-                    The query is ({entity_text}, {relations_text}, ?).\
-                    Additional Context:\
-                    1. Entity neighborhood of {entity_text}: {en}\
-                    2. Relations that co-occur with {relations_text}: {rco}\
-                    Rerank the following top 10 tail entities for '?' based on their relevance and likelihood of being the correct answer, considering the additional context provided: {wid}\
-                    Return the reranked list of entity ids only (not the values) of size 10, ensuring that your reply is a permutation of the tail entity ids that were provided above. Do not output anything other than the list.\
+                    Query:({entity_text}, {relations_text}, ?).\
+                    1. Entity Neighborhood: {en}\ 
+                    2. Path-Based Context: {pbc}\ 
+                    Rerank these top 10 tail entities: {wid}\
+                    Return only the reranked list of entity ids. Do not output anything other than the list.\
                     "
+
+                    print(prompt)
 
                     # put idea of context and use context into system message. put geenral instructions into the system message
                     # sort messages by length and group similar length messages 
@@ -482,11 +511,15 @@ def main(args):
                     batch_messages.append(message)
                     batch_wid.append(wid)
 
-                system_message = {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for some logical queries. \
-                Queries are structured as follows, where the first element is the head and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. \
-                The correct answer to each query is found by starting at the head entity and traversing the graph along the edges specified by the relations, in the order they're given. \
-                The '?' entity candidates are structured and id-value pairs. You only respond with the reranked list of entity ids for each query.\
-                The queries input are in batches, and you have to rerank candidates individually for each query."}
+                # system_message = {"role": "system", "content": "You are an evaluator tasked with re-ranking entities for some logical queries. \
+                # Queries are structured as follows, where the first element is the head and the following elements are relations, and '?' is the tail entity whose candidates we want to rank. \
+                # The correct answer to each query is found by starting at the head entity and traversing the graph along the edges specified by the relations, in the order they're given. \
+                # The '?' entity candidates are structured and id-value pairs. You only respond with the reranked list of entity ids for each query.\
+                # The queries input are in batches, and you have to rerank candidates individually for each query."}
+                system_message = {"role": "system", "content": "You are an evaluator tasked with reranking entities for queries. \
+                Each query is structured with the head entity followed by relations, and '?' is the tail entity. \
+                Rerank candidates individually for each query based on the provided context. \
+                Return only the reranked list of entity ids."}
             
                 terminators = [
                     pipeline.tokenizer.eos_token_id,
@@ -569,7 +602,7 @@ def main(args):
 
         # test_metrics = GQE.evaluate_with_llm(model, (test_easy_answers, test_hard_answers), test_dataloader, DEVICE, pipeline, id2ent, id2rel, text_to_id)
         print("TEST METRICS: Loading in model for testing: ", metrics)
-        print(skipped)
+        # print(skipped)
 
     elif args.load_model:
         model.eval()

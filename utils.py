@@ -46,6 +46,9 @@ if __name__=="__main__":
     args = parse_args()
     queries, easy_answers, hard_answers = load_data(args.data_path)
 
-    avg_num_answers = calculate_average_answers(queries, easy_answers, hard_answers)
+    with open("NELL_test_hard_answers.txt", "w") as f:
+        f.write(str(hard_answers))
 
-    print(avg_num_answers)
+    # avg_num_answers = calculate_average_answers(queries, easy_answers, hard_answers)
+
+    # print(avg_num_answers)
